@@ -5,11 +5,11 @@ import fetch from "node-fetch";
 const app = express();
 app.use(bodyParser.json());
 
-// --- Récupération des variables d'environnement ---
+// --- ENV VARIABLES ---
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 
-// --- CONFIG NOTION ---
+// --- NOTION CONFIG ---
 const NOTION_URL = "https://api.notion.com/v1/pages";
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
@@ -17,85 +17,60 @@ const NOTION_HEADERS = {
   "Notion-Version": "2022-06-28"
 };
 
-// --- ROUTE DE TEST ---
+// --- TEST ROUTE ---
 app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
-// --- ROUTE DU WEBHOOK MOTEURIMMO ---
+// --- MAIN WEBHOOK ---
 app.post("/webhook", async (req, res) => {
   console.log("📩 Webhook reçu :", JSON.stringify(req.body, null, 2));
 
   try {
-    const data = req.body;
-
-    // Vérification simple que les données nécessaires existent
-    if (!data || !data.url) {
+    const saved = req.body.savedAd?.ad;
+    if (!saved) {
       console.error("❌ Données invalides reçues");
       return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // --- Création d'une page Notion ---
-const notionPayload = {
-  parent: { database_id: NOTION_DATABASE_ID },
-  properties: {
-    "Annonce": {
-      url: data.url || null
-    },
-    "Prix affiché": {
-      number: data.price || null
-    },
-    "Surface Habitable": {
-      number: data.surface_habitable || null
-    },
-    "Surface Terrain": {
-      number: data.surface_terrain || null
-    },
-    "Intérêt initial": {
-      rich_text: [
-        {
-          type: "text",
-          text: { content: data.rating?.toString() || "" }
+    // Mapping du JSON MoteurImmo → Propriétés Notion
+    const notionPayload = {
+      parent: { database_id: NOTION_DATABASE_ID },
+      properties: {
+        "Annonce": { url: saved.url },
+        "Prix affiché": { number: saved.price || null },
+        "Surface Habitable": { number: saved.surface || null },
+        "Surface Terrain": { number: saved.landSurface || null },
+        "Intérêt initial": {
+          rich_text: [
+            { type: "text", text: { content: req.body.savedAd.kanbanCategory || "" } }
+          ]
+        },
+        "Adresse": {
+          rich_text: [
+            { type: "text", text: { content: saved.location?.city || "" } }
+          ]
+        },
+        "Lettre du DPE": {
+          multi_select: saved.energyGrade
+            ? [{ name: saved.energyGrade }]
+            : []
+        },
+        "Agence / AI": {
+          rich_text: [
+            { type: "text", text: { content: saved.publisher?.name || "" } }
+          ]
+        },
+        "Téléphone AI": {
+          rich_text: [
+            { type: "text", text: { content: saved.publisher?.phone || "" } }
+          ]
         }
-      ]
-    },
-    "Adresse": {
-      rich_text: [
-        {
-          type: "text",
-          text: { content: data.address || "" }
-        }
-      ]
-    },
-    "Lettre du DPE": {
-      multi_select: data.dpe_letter
-        ? data.dpe_letter.split(",").map(v => ({ name: v.trim() }))
-        : []
-    },
-    "Agence / AI": {
-      rich_text: [
-        {
-          type: "text",
-          text: { content: data.agency || "" }
-        }
-      ]
-    },
-    "Téléphone AI": {
-      rich_text: [
-        {
-          type: "text",
-          text: { content: data.phone || "" }
-        }
-      ]
-    }
-  },
-  cover: data.photo
-    ? {
-        type: "external",
-        external: { url: data.photo }
-      }
-    : undefined
-};
+      },
+      cover: saved.pictureUrl
+        ? { type: "external", external: { url: saved.pictureUrl } }
+        : undefined
+    };
 
     console.log("📤 Envoi vers Notion…");
 
@@ -112,8 +87,7 @@ const notionPayload = {
       return res.status(500).json({ error: notionData });
     }
 
-    console.log("✅ Page ajoutée dans Notion :", notionData.id);
-
+    console.log("✅ Page créée :", notionData.id);
     res.json({ status: "success", notion_page_id: notionData.id });
 
   } catch (err) {
@@ -122,8 +96,8 @@ const notionPayload = {
   }
 });
 
-// --- LANCEMENT DU SERVEUR ---
+// --- SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`🚀 Serveur webhook démarré sur le port ${PORT}`)
+  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
 );
