@@ -36,53 +36,66 @@ app.post("/webhook", async (req, res) => {
     }
 
     // --- Création d'une page Notion ---
-    const notionPayload = {
-      parent: { database_id: NOTION_DATABASE_ID },
-      properties: {
-        "Annonce": {
-          url: data.url || null,
-        },
-        "Prix affiché": {
-          number: data.price || null
-        },
-        "Surface habitable": {
-          number: data.surface_habitable || null
-        },
-        "Surface terrain": {
-          number: data.surface_terrain || null
-        },
-        "Intérêt initial": {
-          number: data.rating || null
-        },
-        "Adresse": {
-          rich_text: [
-            { type: "text", text: { content: data.address || "" } }
-          ]
-        },
-        "Lettre du DPE": {
-          rich_text: [
-            { type: "text", text: { content: data.dpe_letter || "" } }
-          ]
-        },
-        "Agence / AI": {
-          rich_text: [
-            { type: "text", text: { content: data.agency || "" } }
-          ]
-        },
-        "Téléphone AI": {
-          rich_text: [
-            { type: "text", text: { content: data.phone || "" } }
-          ]
+const notionPayload = {
+  parent: { database_id: NOTION_DATABASE_ID },
+  properties: {
+    "Annonce": {
+      url: data.url || null
+    },
+    "Prix affiché": {
+      number: data.price || null
+    },
+    "Surface Habitable": {
+      number: data.surface_habitable || null
+    },
+    "Surface Terrain": {
+      number: data.surface_terrain || null
+    },
+    "Intérêt initial": {
+      rich_text: [
+        {
+          type: "text",
+          text: { content: data.rating?.toString() || "" }
         }
-      },
-      // --- Photo de couverture, si envoyée ---
-      cover: data.photo
-        ? {
-            type: "external",
-            external: { url: data.photo }
-          }
-        : undefined
-    };
+      ]
+    },
+    "Adresse": {
+      rich_text: [
+        {
+          type: "text",
+          text: { content: data.address || "" }
+        }
+      ]
+    },
+    "Lettre du DPE": {
+      multi_select: data.dpe_letter
+        ? data.dpe_letter.split(",").map(v => ({ name: v.trim() }))
+        : []
+    },
+    "Agence / AI": {
+      rich_text: [
+        {
+          type: "text",
+          text: { content: data.agency || "" }
+        }
+      ]
+    },
+    "Téléphone AI": {
+      rich_text: [
+        {
+          type: "text",
+          text: { content: data.phone || "" }
+        }
+      ]
+    }
+  },
+  cover: data.photo
+    ? {
+        type: "external",
+        external: { url: data.photo }
+      }
+    : undefined
+};
 
     console.log("📤 Envoi vers Notion…");
 
