@@ -1,145 +1,116 @@
 import express from "express";
-import dotenv from "dotenv";
-import { Client } from "@notionhq/client";
-
-dotenv.config();
+import bodyParser from "body-parser";
+import fetch from "node-fetch";
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-// --- NOTION CONFIG ---
-const notion = new Client({ auth: process.env.NOTION_TOKEN });
-const databaseId = process.env.NOTION_DATABASE_ID;
+// --- Récupération des variables d'environnement ---
+const NOTION_TOKEN = process.env.NOTION_TOKEN;
+const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 
-// --- WEBHOOK MOTEURIMMO ---
+// --- CONFIG NOTION ---
+const NOTION_URL = "https://api.notion.com/v1/pages";
+const NOTION_HEADERS = {
+  "Authorization": `Bearer ${NOTION_TOKEN}`,
+  "Content-Type": "application/json",
+  "Notion-Version": "2022-06-28"
+};
+
+// --- ROUTE DE TEST ---
+app.get("/", (req, res) => {
+  res.json({ status: "OK" });
+});
+
+// --- ROUTE DU WEBHOOK MOTEURIMMO ---
 app.post("/webhook", async (req, res) => {
-  const event = req.body.event; // created / updated / deleted
-  const bien = req.body.data;
+  console.log("📩 Webhook reçu :", JSON.stringify(req.body, null, 2));
 
   try {
-    if (event === "created") {
-      await createPage(bien);
+    const data = req.body;
+
+    // Vérification simple que les données nécessaires existent
+    if (!data || !data.url) {
+      console.error("❌ Données invalides reçues");
+      return res.status(400).json({ error: "Invalid payload" });
     }
 
-    if (event === "updated") {
-      await updatePage(bien);
+    // --- Création d'une page Notion ---
+    const notionPayload = {
+      parent: { database_id: NOTION_DATABASE_ID },
+      properties: {
+        "Annonce": {
+          url: data.url || null,
+        },
+        "Prix affiché": {
+          number: data.price || null
+        },
+        "Surface habitable": {
+          number: data.surface_habitable || null
+        },
+        "Surface terrain": {
+          number: data.surface_terrain || null
+        },
+        "Intérêt initial": {
+          number: data.rating || null
+        },
+        "Adresse": {
+          rich_text: [
+            { type: "text", text: { content: data.address || "" } }
+          ]
+        },
+        "Lettre du DPE": {
+          rich_text: [
+            { type: "text", text: { content: data.dpe_letter || "" } }
+          ]
+        },
+        "Agence / AI": {
+          rich_text: [
+            { type: "text", text: { content: data.agency || "" } }
+          ]
+        },
+        "Téléphone AI": {
+          rich_text: [
+            { type: "text", text: { content: data.phone || "" } }
+          ]
+        }
+      },
+      // --- Photo de couverture, si envoyée ---
+      cover: data.photo
+        ? {
+            type: "external",
+            external: { url: data.photo }
+          }
+        : undefined
+    };
+
+    console.log("📤 Envoi vers Notion…");
+
+    const notionRes = await fetch(NOTION_URL, {
+      method: "POST",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(notionPayload)
+    });
+
+    const notionData = await notionRes.json();
+
+    if (!notionRes.ok) {
+      console.error("❌ Erreur Notion :", notionData);
+      return res.status(500).json({ error: notionData });
     }
 
-    if (event === "deleted") {
-      await deletePage(bien.id);
-    }
+    console.log("✅ Page ajoutée dans Notion :", notionData.id);
 
-    res.status(200).json({ status: "OK" });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
+    res.json({ status: "success", notion_page_id: notionData.id });
+
+  } catch (err) {
+    console.error("🔥 ERREUR serveur :", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// --- CREATE ---
-async function createPage(bien) {
-  await notion.pages.create({
-    parent: { database_id: databaseId },
-
-    cover: bien.photos?.length
-      ? { external: { url: bien.photos[0] } }
-      : undefined,
-
-    properties: {
-      ID: { rich_text: [{ text: { content: bien.id } }] },
-      Annonce: { url: bien.url },
-
-      "Prix affiché": { number: bien.price || null },
-      "Surface habitable": { number: bien.livable_surface || null },
-      "Surface terrain": { number: bien.land_surface || null },
-
-      "Intérêt initial": {
-        number: bien.note || null
-      },
-
-      Adresse: {
-        rich_text: [{ text: { content: bien.address || "" } }]
-      },
-
-      "Lettre du DPE": {
-        rich_text: [{ text: { content: bien.dpe_letter || "" } }]
-      },
-
-      "Agence / AI": {
-        rich_text: [{ text: { content: bien.agency || "" } }]
-      },
-
-      "Téléphone AI": {
-        rich_text: [{ text: { content: bien.phone || "" } }]
-      }
-    }
-  });
-}
-
-// --- UPDATE ---
-async function updatePage(bien) {
-  const page = await findPageById(bien.id);
-  if (!page) return createPage(bien);
-
-  await notion.pages.update({
-    page_id: page.id,
-
-    cover: bien.photos?.length
-      ? { external: { url: bien.photos[0] } }
-      : undefined,
-
-    properties: {
-      Annonce: { url: bien.url },
-
-      "Prix affiché": { number: bien.price || null },
-      "Surface habitable": { number: bien.livable_surface || null },
-      "Surface terrain": { number: bien.land_surface || null },
-
-      "Intérêt initial": { number: bien.note || null },
-
-      Adresse: {
-        rich_text: [{ text: { content: bien.address || "" } }]
-      },
-
-      "Lettre du DPE": {
-        rich_text: [{ text: { content: bien.dpe_letter || "" } }]
-      },
-
-      "Agence / AI": {
-        rich_text: [{ text: { content: bien.agency || "" } }]
-      },
-
-      "Téléphone AI": {
-        rich_text: [{ text: { content: bien.phone || "" } }]
-      }
-    }
-  });
-}
-
-// --- DELETE (archive) ---
-async function deletePage(id) {
-  const page = await findPageById(id);
-  if (!page) return;
-
-  await notion.pages.update({
-    page_id: page.id,
-    archived: true
-  });
-}
-
-// --- FIND PAGE BY MOTEURIMMO ID ---
-async function findPageById(id) {
-  const response = await notion.databases.query({
-    database_id: databaseId,
-    filter: {
-      property: "ID",
-      rich_text: { equals: id }
-    }
-  });
-
-  return response.results[0];
-}
-
-app.listen(3000, () => {
-  console.log("Webhook MoteurImmo → Notion actif");
-});
+// --- LANCEMENT DU SERVEUR ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`🚀 Serveur webhook démarré sur le port ${PORT}`)
+);
