@@ -12,7 +12,7 @@ const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 // --- NOTION CONFIG ---
 const NOTION_URL = "https://api.notion.com/v1/pages";
 const NOTION_HEADERS = {
-  "Authorization": `Bearer ${NOTION_TOKEN}`,
+  "Authorization": Bearer ${NOTION_TOKEN},
   "Content-Type": "application/json",
   "Notion-Version": "2022-06-28"
 };
@@ -28,9 +28,17 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const saved = req.body.savedAd?.ad;
+    const kanban = req.body.savedAd?.kanbanCategory;
+
     if (!saved) {
       console.error("❌ Données invalides reçues");
       return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    // --- 🔍 NOUVEAU : filtrage par KanbanCategory ---
+    if (kanban !== "Notion") {
+      console.log(⏩ Ignoré : KanbanCategory = "${kanban}");
+      return res.json({ ignored: true, reason: "KanbanCategory is not 'Notion'" });
     }
 
     // Mapping du JSON MoteurImmo → Propriétés Notion
@@ -43,7 +51,7 @@ app.post("/webhook", async (req, res) => {
         "Surface Terrain": { number: saved.landSurface || null },
         "Intérêt initial": {
           rich_text: [
-            { type: "text", text: { content: req.body.savedAd.kanbanCategory || "" } }
+            { type: "text", text: { content: kanban || "" } }
           ]
         },
         "Adresse": {
@@ -99,5 +107,5 @@ app.post("/webhook", async (req, res) => {
 // --- SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
+  console.log(🚀 Webhook serveur lancé sur port ${PORT})
 );
