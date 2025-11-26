@@ -14,7 +14,7 @@ const NOTION_URL = "https://api.notion.com/v1/pages";
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  "Notion-Version": "2022-06-28"
+  "Notion-Version": "2025-09-03"  // version récente pour template support
 };
 
 // --- TEST ROUTE ---
@@ -28,22 +28,22 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const saved = req.body.savedAd?.ad;
-    const kanban = req.body.savedAd?.kanbanCategory;
-
     if (!saved) {
       console.error("❌ Données invalides reçues");
       return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // --- 🔍 NOUVEAU : filtrage par KanbanCategory ---
+    // Vérifier si on veut créer l'entrée (ex: selon kanbanCategory)
+    const kanban = req.body.savedAd.kanbanCategory;
     if (kanban !== "Notion") {
-      console.log(`⏩ Ignoré : KanbanCategory = "${kanban}"`);
-      return res.json({ ignored: true, reason: "KanbanCategory is not 'Notion'" });
+      console.log("⏭️ Annonce ignorée, KanbanCategory =", kanban);
+      return res.status(200).json({ status: "skipped" });
     }
 
-    // Mapping du JSON MoteurImmo → Propriétés Notion
+    // --- Création d'une page Notion en utilisant le template par défaut ---
     const notionPayload = {
-      parent: { database_id: NOTION_DATABASE_ID },
+      parent: { data_source_id: NOTION_DATABASE_ID },
+      template: { type: "default" },
       properties: {
         "Annonce": { url: saved.url },
         "Prix affiché": { number: saved.price || null },
@@ -51,7 +51,7 @@ app.post("/webhook", async (req, res) => {
         "Surface Terrain": { number: saved.landSurface || null },
         "Intérêt initial": {
           rich_text: [
-            { type: "text", text: { content: kanban || "" } }
+            { type: "text", text: { content: "" } }
           ]
         },
         "Adresse": {
@@ -80,7 +80,7 @@ app.post("/webhook", async (req, res) => {
         : undefined
     };
 
-    console.log("📤 Envoi vers Notion…");
+    console.log("📤 Envoi vers Notion (template default)…");
 
     const notionRes = await fetch(NOTION_URL, {
       method: "POST",
@@ -95,7 +95,7 @@ app.post("/webhook", async (req, res) => {
       return res.status(500).json({ error: notionData });
     }
 
-    console.log("✅ Page créée :", notionData.id);
+    console.log("✅ Page créée avec template :", notionData.id);
     res.json({ status: "success", notion_page_id: notionData.id });
 
   } catch (err) {
@@ -107,5 +107,4 @@ app.post("/webhook", async (req, res) => {
 // --- SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
-);
+  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
