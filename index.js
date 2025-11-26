@@ -19,7 +19,7 @@ const NOTION_HEADERS = {
 };
 
 // --- HELPERS ---
-function buildPropertiesFromSaved(saved, kanban) {
+function buildPropertiesFromSaved(saved, savedAd) {
   return {
     "Annonce": { url: saved.url || null },
 
@@ -29,11 +29,11 @@ function buildPropertiesFromSaved(saved, kanban) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // --- Intérêt initial : correctif -> on prend bien saved.comment
+    // --- Intérêt initial : CORRIGÉ (on prend bien savedAd.comment)
     "Intérêt initial": {
       rich_text: [{
         type: "text",
-        text: { content: saved.comment ? String(saved.comment) : "" }
+        text: { content: savedAd.comment ? String(savedAd.comment) : "" }
       }]
     },
 
@@ -45,7 +45,7 @@ function buildPropertiesFromSaved(saved, kanban) {
       }]
     },
 
-    // Adresse (également ville)
+    // Adresse = ville
     "Adresse": {
       rich_text: [{
         type: "text",
@@ -86,11 +86,14 @@ app.post("/webhook", async (req, res) => {
     const event = req.body.event;
     const savedAd = req.body.savedAd;
     const saved = savedAd?.ad;
-    const kanban = savedAd?.kanbanCategory;
 
     if (!saved) {
       console.error("❌ Données invalides reçues");
-      return res.status(400).json({ error: "Invalid payload" });
+      return res.status(400).json({
+        error: "Invalid payload",
+        pictogram: "🔴",
+        message: "Payload invalide"
+      });
     }
 
     // On ignore les suppressions
@@ -104,12 +107,12 @@ app.post("/webhook", async (req, res) => {
     }
 
     // On garde uniquement KanbanCategory = Notion
-    if (kanban !== "Notion") {
-      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
+    if (savedAd.kanbanCategory !== "Notion") {
+      console.log(`⏭️ Ignoré : KanbanCategory = "${savedAd.kanbanCategory}"`);
       return res.status(200).json({
         ignored: true,
         pictogram: "⚪",
-        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
+        message: `Annonce ignorée car KanbanCategory = "${savedAd.kanbanCategory}"`
       });
     }
 
@@ -126,16 +129,18 @@ app.post("/webhook", async (req, res) => {
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) return res.status(500).json({
-      error: createData,
-      pictogram: "🔴",
-      message: "Erreur lors de la création Notion"
-    });
+    if (!createRes.ok) {
+      return res.status(500).json({
+        error: createData,
+        pictogram: "🔴",
+        message: "Erreur lors de la création Notion"
+      });
+    }
 
     const pageId = createData.id;
 
     // --- UPDATE PROPERTIES ---
-    const updatePayload = { properties: buildPropertiesFromSaved(saved, kanban) };
+    const updatePayload = { properties: buildPropertiesFromSaved(saved, savedAd) };
 
     const updateRes = await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
@@ -144,11 +149,13 @@ app.post("/webhook", async (req, res) => {
     });
 
     const updateData = await updateRes.json();
-    if (!updateRes.ok) return res.status(500).json({
-      error: updateData,
-      pictogram: "🔴",
-      message: "Erreur lors de la mise à jour des propriétés"
-    });
+    if (!updateRes.ok) {
+      return res.status(500).json({
+        error: updateData,
+        pictogram: "🔴",
+        message: "Erreur lors de la mise à jour des propriétés"
+      });
+    }
 
     // --- COVER ---
     const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
