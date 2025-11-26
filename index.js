@@ -19,7 +19,7 @@ const NOTION_HEADERS = {
 };
 
 // --- HELPERS ---
-function buildPropertiesFromSaved(saved) {
+function buildPropertiesFromSaved(saved, kanban) {
   return {
     "Annonce": { url: saved.url || null },
 
@@ -29,7 +29,15 @@ function buildPropertiesFromSaved(saved) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // 🔥 Secteur = ville
+    // 🔥 Intérêt initial = sauvegarde du commentaire MoteurImmo
+    "Intérêt initial": {
+      rich_text: [{
+        type: "text",
+        text: { content: saved.comment ? String(saved.comment) : "" }
+      }]
+    },
+
+    // 🔥 Secteur = nom de la ville
     "Secteur": {
       rich_text: [{
         type: "text",
@@ -37,7 +45,7 @@ function buildPropertiesFromSaved(saved) {
       }]
     },
 
-    // 🔥 Adresse = ville
+    // Adresse = ville (tu peux changer si souhaité)
     "Adresse": {
       rich_text: [{
         type: "text",
@@ -45,7 +53,6 @@ function buildPropertiesFromSaved(saved) {
       }]
     },
 
-    // 🔥 Lettre DPE
     "Lettre du DPE": {
       multi_select: (saved.energyGrade || saved.gasGrade)
         ? [{ name: saved.energyGrade || saved.gasGrade }]
@@ -86,16 +93,65 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // 🔥 Ignore DELETE
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({ ignored: true, reason: "delete ignored" });
     }
 
-    // 🔥 On ne crée QUE si KanbanCategory = "Notion"
     if (kanban !== "Notion") {
       console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
       return res.status(200).json({ ignored: true });
     }
 
-    // --- CREATE with Default
+    // --- CREATE with Default Template ---
+    const createPayload = {
+      parent: { database_id: NOTION_DATABASE_ID },
+      template: { type: "default" }
+    };
+
+    const createRes = await fetch(NOTION_CREATE_URL, {
+      method: "POST",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(createPayload)
+    });
+
+    const createData = await createRes.json();
+    if (!createRes.ok) return res.status(500).json({ error: createData });
+
+    const pageId = createData.id;
+
+    // --- UPDATE PROPERTIES ---
+    const updatePayload = { properties: buildPropertiesFromSaved(saved, kanban) };
+
+    const updateRes = await fetch(NOTION_PAGE_URL(pageId), {
+      method: "PATCH",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(updatePayload)
+    });
+
+    const updateData = await updateRes.json();
+    if (!updateRes.ok) return res.status(500).json({ error: updateData });
+
+    // --- COVER ---
+    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+    if (coverUrl) {
+      await fetch(NOTION_PAGE_URL(pageId), {
+        method: "PATCH",
+        headers: NOTION_HEADERS,
+        body: JSON.stringify({
+          cover: { type: "external", external: { url: coverUrl } }
+        })
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({ status: "success", notion_page_id: pageId });
+
+  } catch (err) {
+    console.error("🔥 ERREUR serveur :", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// --- SERVER ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
