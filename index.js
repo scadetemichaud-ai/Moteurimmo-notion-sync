@@ -32,12 +32,11 @@ function buildPropertiesFromSaved(savedAd, saved, kanban) {
     "Surface Habitable": { number: saved?.surface ?? null },
 
     "Surface Terrain": { number: saved?.landSurface ?? null },
-
-    // --- Intérêt initial : on prend savedAd.comment prioritairement
+    
     "Intérêt initial": {
       rich_text: [{
         type: "text",
-        text: { content: String(commentText) }
+        text: { content: String(comment) }
       }]
     },
 
