@@ -29,7 +29,7 @@ function buildPropertiesFromSaved(saved, kanban) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // 🔥 Intérêt initial = sauvegarde du commentaire MoteurImmo
+    // --- Intérêt initial : correctif -> on prend bien saved.comment
     "Intérêt initial": {
       rich_text: [{
         type: "text",
@@ -37,7 +37,7 @@ function buildPropertiesFromSaved(saved, kanban) {
       }]
     },
 
-    // 🔥 Secteur = nom de la ville
+    // Secteur = ville
     "Secteur": {
       rich_text: [{
         type: "text",
@@ -45,7 +45,7 @@ function buildPropertiesFromSaved(saved, kanban) {
       }]
     },
 
-    // Adresse = ville (tu peux changer si souhaité)
+    // Adresse (également ville)
     "Adresse": {
       rich_text: [{
         type: "text",
@@ -93,14 +93,24 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Invalid payload" });
     }
 
+    // On ignore les suppressions
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
-      return res.status(200).json({ ignored: true, reason: "delete ignored" });
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
+        message: "Suppression ignorée"
+      });
     }
 
+    // On garde uniquement KanbanCategory = Notion
     if (kanban !== "Notion") {
       console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
-      return res.status(200).json({ ignored: true });
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
+        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
+      });
     }
 
     // --- CREATE with Default Template ---
@@ -116,7 +126,11 @@ app.post("/webhook", async (req, res) => {
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) return res.status(500).json({ error: createData });
+    if (!createRes.ok) return res.status(500).json({
+      error: createData,
+      pictogram: "🔴",
+      message: "Erreur lors de la création Notion"
+    });
 
     const pageId = createData.id;
 
@@ -130,7 +144,11 @@ app.post("/webhook", async (req, res) => {
     });
 
     const updateData = await updateRes.json();
-    if (!updateRes.ok) return res.status(500).json({ error: updateData });
+    if (!updateRes.ok) return res.status(500).json({
+      error: updateData,
+      pictogram: "🔴",
+      message: "Erreur lors de la mise à jour des propriétés"
+    });
 
     // --- COVER ---
     const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
@@ -144,11 +162,20 @@ app.post("/webhook", async (req, res) => {
       }).catch(() => {});
     }
 
-    return res.status(200).json({ status: "success", notion_page_id: pageId });
+    return res.status(200).json({
+      status: "success",
+      notion_page_id: pageId,
+      pictogram: "🟢",
+      message: "Annonce ajoutée à Notion"
+    });
 
   } catch (err) {
     console.error("🔥 ERREUR serveur :", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message,
+      pictogram: "🔴",
+      message: "Erreur serveur"
+    });
   }
 });
 
