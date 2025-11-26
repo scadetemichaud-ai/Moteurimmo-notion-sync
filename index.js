@@ -41,11 +41,33 @@ app.post("/webhook", async (req, res) => {
       return res.json({ ignored: true, reason: "KanbanCategory is not 'Notion'" });
     }
 
-    // --- 💡 Création avec le template par défaut ---
-    // Notion applique AUTOMATIQUEMENT le template par défaut du database.
-
-    const notionPayload = {
+    // --- 1️⃣ CREATION PAGE AVEC TEMPLATE PAR DEFAUT ---
+    const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
+      // ⚠️ Ne pas mettre properties → sinon Notion n'applique PAS le template
+      properties: {}
+    };
+
+    console.log("📤 Création page (template par défaut)…");
+
+    const createRes = await fetch(NOTION_URL, {
+      method: "POST",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(createPayload)
+    });
+
+    const createData = await createRes.json();
+
+    if (!createRes.ok) {
+      console.error("❌ Erreur Notion (creation) :", createData);
+      return res.status(500).json({ error: createData });
+    }
+
+    const pageId = createData.id;
+    console.log("✅ Page créée avec template :", pageId);
+
+    // --- 2️⃣ MISE À JOUR DES PROPRIETES ---
+    const updatePayload = {
       properties: {
         "Annonce": { url: saved.url },
         "Prix affiché": { number: saved.price || null },
@@ -76,29 +98,26 @@ app.post("/webhook", async (req, res) => {
             { type: "text", text: { content: saved.publisher?.phone || "" } }
           ]
         }
-      },
-      cover: saved.pictureUrl
-        ? { type: "external", external: { url: saved.pictureUrl } }
-        : undefined
+      }
     };
 
-    console.log("📤 Envoi vers Notion (avec template par défaut)…");
+    console.log("📤 Mise à jour des propriétés…");
 
-    const notionRes = await fetch(NOTION_URL, {
-      method: "POST",
+    const updateRes = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: "PATCH",
       headers: NOTION_HEADERS,
-      body: JSON.stringify(notionPayload)
+      body: JSON.stringify(updatePayload)
     });
 
-    const notionData = await notionRes.json();
+    const updateData = await updateRes.json();
 
-    if (!notionRes.ok) {
-      console.error("❌ Erreur Notion :", notionData);
-      return res.status(500).json({ error: notionData });
+    if (!updateRes.ok) {
+      console.error("❌ Erreur Notion (update) :", updateData);
+      return res.status(500).json({ error: updateData });
     }
 
-    console.log("✅ Page créée :", notionData.id);
-    res.json({ status: "success", notion_page_id: notionData.id });
+    console.log("✅ Propriétés mises à jour avec succès !");
+    res.json({ status: "success", notion_page_id: pageId });
 
   } catch (err) {
     console.error("🔥 ERREUR serveur :", err);
