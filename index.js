@@ -15,14 +15,13 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  // Version récente pour template / pages.update
   "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
 function buildPropertiesFromSaved(saved, savedAd) {
-  // saved = savedAd.ad
-  const comment = savedAd?.comment ?? ""; // <-- IMPORTANT: le commentaire est dans savedAd.comment
+  const comment = savedAd?.comment ?? "";
+
   return {
     "Annonce": { url: saved.url || null },
 
@@ -32,7 +31,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // Intérêt initial : on prend savedAd.comment (texte)
+    // Intérêt initial
     "Intérêt initial": {
       rich_text: [{
         type: "text",
@@ -48,7 +47,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
       }]
     },
 
-    // Adresse = ville (tu peux changer si besoin)
+    // Adresse
     "Adresse": {
       rich_text: [{
         type: "text",
@@ -73,6 +72,14 @@ function buildPropertiesFromSaved(saved, savedAd) {
       rich_text: [{
         type: "text",
         text: { content: saved.publisher?.phone || "" }
+      }]
+    },
+
+    // ⭐⭐⭐ AJOUT : Champ Notion "Projet"
+    "Projet": {
+      rich_text: [{
+        type: "text",
+        text: { content: "Envoyé depuis MoteurImmo" }
       }]
     }
   };
@@ -120,10 +127,9 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // --- 1) Créer la page en demandant le template par défaut ---
+    // --- 1) Créer la page via le template par défaut ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
-      // demande d'application du template par défaut
       template: { type: "default" }
     };
 
@@ -147,16 +153,13 @@ app.post("/webhook", async (req, res) => {
     const createdPageId = createData.id;
     console.log("✅ Page créée (id) :", createdPageId);
 
-    // --- 2) PATCH : mettre à jour les propriétés (on utilise savedAd.comment ici) ---
+    // --- 2) PATCH propriétés ---
     const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
 
-    const updatePayload = { properties: propertiesToUpdate };
-
-    console.log("🔁 Mise à jour des propriétés de la page...", updatePayload);
     const updateRes = await fetch(NOTION_PAGE_URL(createdPageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
-      body: JSON.stringify(updatePayload)
+      body: JSON.stringify({ properties: propertiesToUpdate })
     });
 
     const updateData = await updateRes.json();
@@ -169,26 +172,20 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // --- 3) Mettre la couverture si une image existe ---
+    // --- 3) Couverture ---
     const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
     if (coverUrl) {
       try {
-        const coverRes = await fetch(NOTION_PAGE_URL(createdPageId), {
+        await fetch(NOTION_PAGE_URL(createdPageId), {
           method: "PATCH",
           headers: NOTION_HEADERS,
           body: JSON.stringify({
             cover: { type: "external", external: { url: coverUrl } }
           })
         });
-
-        if (!coverRes.ok) {
-          const coverData = await coverRes.json();
-          console.warn("⚠️ Warning: impossible de mettre la couverture :", coverData);
-        } else {
-          console.log("🖼️ Couverture définie.");
-        }
-      } catch (err) {
-        console.warn("⚠️ Erreur lors de la mise de la couverture :", err.message);
+        console.log("🖼️ Couverture définie.");
+      } catch {
+        console.warn("⚠️ Erreur lors de la mise de la couverture");
       }
     }
 
