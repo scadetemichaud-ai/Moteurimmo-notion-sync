@@ -15,11 +15,14 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  "Notion-Version": "2022-06-28"
+  // Version récente pour template / pages.update
+  "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
-function buildProperties(saved) {
+function buildPropertiesFromSaved(saved, savedAd) {
+  // saved = savedAd.ad
+  const comment = savedAd?.comment ?? ""; // <-- IMPORTANT: le commentaire est dans savedAd.comment
   return {
     "Annonce": { url: saved.url || null },
 
@@ -29,31 +32,33 @@ function buildProperties(saved) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // 🟢 "Intérêt initial" = contenu du commentaire envoyé par le webhook
+    // Intérêt initial : on prend savedAd.comment (texte)
     "Intérêt initial": {
       rich_text: [{
         type: "text",
-        text: { content: saved.comment || "" }
+        text: { content: String(comment) }
       }]
     },
 
+    // Secteur = ville
     "Secteur": {
       rich_text: [{
         type: "text",
-        text: { content: saved.location?.city || "" }
+        text: { content: (saved.location?.city || "").toString() }
       }]
     },
 
+    // Adresse = ville (tu peux changer si besoin)
     "Adresse": {
       rich_text: [{
         type: "text",
-        text: { content: saved.location?.city || "" }
+        text: { content: (saved.location?.city || "").toString() }
       }]
     },
 
     "Lettre du DPE": {
-      multi_select: saved.energyGrade
-        ? [{ name: saved.energyGrade }]
+      multi_select: (saved.energyGrade || saved.gasGrade)
+        ? [{ name: saved.energyGrade || saved.gasGrade }]
         : []
     },
 
@@ -84,38 +89,45 @@ app.post("/webhook", async (req, res) => {
     const event = req.body.event;
     const savedAd = req.body.savedAd;
     const saved = savedAd?.ad;
+    const kanban = savedAd?.kanbanCategory;
 
-    if (!saved) {
+    if (!savedAd || !saved) {
       console.error("❌ Données invalides reçues");
-      return res.status(400).json({ error: "Invalid payload" });
+      return res.status(400).json({
+        error: "Invalid payload",
+        pictogram: "🔴",
+        message: "Payload invalide"
+      });
     }
 
-    // IGNORE suppression
+    // Ignorer les suppressions
     if (event && event.toLowerCase().includes("deleted")) {
-      return res.status(200).json({ ignored: true });
+      console.log("⏭️ Suppression ignorée");
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
+        message: "Suppression ignorée"
+      });
     }
 
-    // IGNORE si KanbanCategory ≠ "Notion"
-    if (savedAd.kanbanCategory !== "Notion") {
-      return res.status(200).json({ ignored: true });
+    // Filtrer sur KanbanCategory = "Notion"
+    if (kanban !== "Notion") {
+      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
+        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
+      });
     }
 
-    // 🔥 Injection du commentaire pour le mettre dans "Intérêt initial"
-    saved.comment = savedAd.comment;
-
-    // --- CREATE PAGE ---
+    // --- 1) Créer la page en demandant le template par défaut ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
-      properties: {
-        "Nom": {
-          title: [{
-            type: "text",
-            text: { content: saved.title || "Sans titre" }
-          }]
-        }
-      }
+      // demande d'application du template par défaut
+      template: { type: "default" }
     };
 
+    console.log("📤 Création page (template default) sur Notion...");
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
@@ -123,36 +135,78 @@ app.post("/webhook", async (req, res) => {
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) return res.status(500).json({ error: createData });
+    if (!createRes.ok) {
+      console.error("❌ Erreur lors de la création (Notion) :", createData);
+      return res.status(500).json({
+        error: createData,
+        pictogram: "🔴",
+        message: "Erreur lors de la création Notion"
+      });
+    }
 
-    const pageId = createData.id;
+    const createdPageId = createData.id;
+    console.log("✅ Page créée (id) :", createdPageId);
 
-    // --- UPDATE PROPERTIES ---
-    const updatePayload = { properties: buildProperties(saved) };
+    // --- 2) PATCH : mettre à jour les propriétés (on utilise savedAd.comment ici) ---
+    const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
 
-    await fetch(NOTION_PAGE_URL(pageId), {
+    const updatePayload = { properties: propertiesToUpdate };
+
+    console.log("🔁 Mise à jour des propriétés de la page...", updatePayload);
+    const updateRes = await fetch(NOTION_PAGE_URL(createdPageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
       body: JSON.stringify(updatePayload)
     });
 
-    // --- COVER ---
-    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
-    if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(pageId), {
-        method: "PATCH",
-        headers: NOTION_HEADERS,
-        body: JSON.stringify({
-          cover: { type: "external", external: { url: coverUrl } }
-        })
-      }).catch(() => {});
+    const updateData = await updateRes.json();
+    if (!updateRes.ok) {
+      console.error("❌ Erreur lors de la mise à jour (Notion) :", updateData);
+      return res.status(500).json({
+        error: updateData,
+        pictogram: "🔴",
+        message: "Erreur lors de la mise à jour des propriétés"
+      });
     }
 
-    return res.status(200).json({ status: "success", notion_page_id: pageId });
+    // --- 3) Mettre la couverture si une image existe ---
+    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+    if (coverUrl) {
+      try {
+        const coverRes = await fetch(NOTION_PAGE_URL(createdPageId), {
+          method: "PATCH",
+          headers: NOTION_HEADERS,
+          body: JSON.stringify({
+            cover: { type: "external", external: { url: coverUrl } }
+          })
+        });
+
+        if (!coverRes.ok) {
+          const coverData = await coverRes.json();
+          console.warn("⚠️ Warning: impossible de mettre la couverture :", coverData);
+        } else {
+          console.log("🖼️ Couverture définie.");
+        }
+      } catch (err) {
+        console.warn("⚠️ Erreur lors de la mise de la couverture :", err.message);
+      }
+    }
+
+    console.log("🎉 Page mise à jour avec les données MoteurImmo :", createdPageId);
+    return res.status(200).json({
+      status: "success",
+      notion_page_id: createdPageId,
+      pictogram: "🟢",
+      message: "Annonce ajoutée à Notion"
+    });
 
   } catch (err) {
     console.error("🔥 ERREUR serveur :", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message,
+      pictogram: "🔴",
+      message: "Erreur serveur"
+    });
   }
 });
 
