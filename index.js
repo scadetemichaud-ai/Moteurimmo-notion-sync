@@ -15,14 +15,30 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  // Version récente pour template / pages.update
+  // version récente recommandée
   "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
+function humanizeCategory(cat) {
+  if (!cat) return "";
+  const c = String(cat).toLowerCase();
+  if (c.includes("house") || c === "house" || c.includes("maison")) return "Maison";
+  if (c.includes("apartment") || c === "apartment" || c.includes("appartement")) return "Appartement";
+  if (c.includes("building") || c === "building" || c.includes("immeuble")) return "Immeuble";
+  if (c.includes("farm") || c === "farm" || c.includes("ferme")) return "Ferme";
+  if (c.includes("land") || c === "land" || c.includes("terrain")) return "Terrain";
+  // fallback : capitalize first letter
+  return cat.charAt(0).toUpperCase() + cat.slice(1);
+}
+
 function buildPropertiesFromSaved(saved, savedAd) {
   // saved = savedAd.ad
-  const comment = savedAd?.comment ?? ""; // <-- IMPORTANT: le commentaire est dans savedAd.comment
+  const comment = savedAd?.comment ?? ""; // commentaire utilisateur/sur le favori
+  const city = (saved.location?.city || "").toString();
+  const typeLabel = humanizeCategory(saved.category || saved.type || "");
+  const projetValue = `${typeLabel}${typeLabel && city ? " " : ""}${city}`.trim();
+
   return {
     "Annonce": { url: saved.url || null },
 
@@ -32,7 +48,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // Intérêt initial : on prend savedAd.comment (texte)
+    // Intérêt initial : texte provenant de savedAd.comment
     "Intérêt initial": {
       rich_text: [{
         type: "text",
@@ -44,15 +60,23 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Secteur": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: city }
       }]
     },
 
-    // Adresse = ville (tu peux changer si besoin)
+    // Projet = "TypeBien Ville" (ex: "Immeuble Macon")
+    "Projet": {
+      rich_text: [{
+        type: "text",
+        text: { content: projetValue }
+      }]
+    },
+
+    // Adresse = ville (à adapter si tu veux l'adresse complète)
     "Adresse": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: city }
       }]
     },
 
@@ -100,7 +124,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // Ignorer les suppressions
+    // Ignorer les suppressions (on ne veut pas supprimer en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
@@ -123,7 +147,6 @@ app.post("/webhook", async (req, res) => {
     // --- 1) Créer la page en demandant le template par défaut ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
-      // demande d'application du template par défaut
       template: { type: "default" }
     };
 
