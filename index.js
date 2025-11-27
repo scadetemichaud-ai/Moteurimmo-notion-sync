@@ -15,11 +15,11 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  "Notion-Version": "2025-09-03"
+  "Notion-Version": "2022-06-28"
 };
 
 // --- HELPERS ---
-function buildPropertiesFromSaved(saved, kanban) {
+function buildProperties(saved) {
   return {
     "Annonce": { url: saved.url || null },
 
@@ -29,33 +29,31 @@ function buildPropertiesFromSaved(saved, kanban) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
-    // --- Intérêt initial : correctif -> on prend bien saved.comment
+    // 🟢 "Intérêt initial" = contenu du commentaire envoyé par le webhook
     "Intérêt initial": {
       rich_text: [{
         type: "text",
-        text: { content: saved.comment ? String(saved.comment) : "" }
+        text: { content: saved.comment || "" }
       }]
     },
 
-    // Secteur = ville
     "Secteur": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: saved.location?.city || "" }
       }]
     },
 
-    // Adresse (également ville)
     "Adresse": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: saved.location?.city || "" }
       }]
     },
 
     "Lettre du DPE": {
-      multi_select: (saved.energyGrade || saved.gasGrade)
-        ? [{ name: saved.energyGrade || saved.gasGrade }]
+      multi_select: saved.energyGrade
+        ? [{ name: saved.energyGrade }]
         : []
     },
 
@@ -86,37 +84,36 @@ app.post("/webhook", async (req, res) => {
     const event = req.body.event;
     const savedAd = req.body.savedAd;
     const saved = savedAd?.ad;
-    const kanban = savedAd?.kanbanCategory;
 
     if (!saved) {
       console.error("❌ Données invalides reçues");
       return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // On ignore les suppressions
+    // IGNORE suppression
     if (event && event.toLowerCase().includes("deleted")) {
-      console.log("⏭️ Suppression ignorée");
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: "Suppression ignorée"
-      });
+      return res.status(200).json({ ignored: true });
     }
 
-    // On garde uniquement KanbanCategory = Notion
-    if (kanban !== "Notion") {
-      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
-      });
+    // IGNORE si KanbanCategory ≠ "Notion"
+    if (savedAd.kanbanCategory !== "Notion") {
+      return res.status(200).json({ ignored: true });
     }
 
-    // --- CREATE with Default Template ---
+    // 🔥 Injection du commentaire pour le mettre dans "Intérêt initial"
+    saved.comment = savedAd.comment;
+
+    // --- CREATE PAGE ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
-      template: { type: "default" }
+      properties: {
+        "Nom": {
+          title: [{
+            type: "text",
+            text: { content: saved.title || "Sans titre" }
+          }]
+        }
+      }
     };
 
     const createRes = await fetch(NOTION_CREATE_URL, {
@@ -126,28 +123,17 @@ app.post("/webhook", async (req, res) => {
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) return res.status(500).json({
-      error: createData,
-      pictogram: "🔴",
-      message: "Erreur lors de la création Notion"
-    });
+    if (!createRes.ok) return res.status(500).json({ error: createData });
 
     const pageId = createData.id;
 
     // --- UPDATE PROPERTIES ---
-    const updatePayload = { properties: buildPropertiesFromSaved(saved, kanban) };
+    const updatePayload = { properties: buildProperties(saved) };
 
-    const updateRes = await fetch(NOTION_PAGE_URL(pageId), {
+    await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
       body: JSON.stringify(updatePayload)
-    });
-
-    const updateData = await updateRes.json();
-    if (!updateRes.ok) return res.status(500).json({
-      error: updateData,
-      pictogram: "🔴",
-      message: "Erreur lors de la mise à jour des propriétés"
     });
 
     // --- COVER ---
@@ -162,20 +148,11 @@ app.post("/webhook", async (req, res) => {
       }).catch(() => {});
     }
 
-    return res.status(200).json({
-      status: "success",
-      notion_page_id: pageId,
-      pictogram: "🟢",
-      message: "Annonce ajoutée à Notion"
-    });
+    return res.status(200).json({ status: "success", notion_page_id: pageId });
 
   } catch (err) {
     console.error("🔥 ERREUR serveur :", err);
-    return res.status(500).json({
-      error: err.message,
-      pictogram: "🔴",
-      message: "Erreur serveur"
-    });
+    return res.status(500).json({ error: err.message });
   }
 });
 
