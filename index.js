@@ -15,15 +15,22 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  // Version récente pour template / pages.update
+  // version récente pour template / pages.update
   "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
 function buildPropertiesFromSaved(saved, savedAd) {
   // saved = savedAd.ad
-  const comment = savedAd?.comment ?? ""; // <-- IMPORTANT: le commentaire est dans savedAd.comment
+  const comment = savedAd?.comment ?? ""; // commentaire utilisateur de MoteurImmo
   return {
+    "Projet": {
+      // **TYPE TITLE** exigé par Notion pour la propriété Projet
+      title: [
+        { type: "text", text: { content: "Envoyé depuis MoteurImmo" } }
+      ]
+    },
+
     "Annonce": { url: saved.url || null },
 
     "Prix affiché": { number: saved.price ?? null },
@@ -100,7 +107,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // Ignorer les suppressions
+    // Ignorer les suppressions (on ne supprime pas en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
