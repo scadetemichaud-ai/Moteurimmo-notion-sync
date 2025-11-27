@@ -47,6 +47,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
   return {
+    // Projet (title)
     "Projet": {
       title: [
         { type: "text", text: { content: projetValue } }
@@ -102,9 +103,9 @@ function buildPropertiesFromSaved(saved, savedAd) {
       }]
     },
 
-    // ✅ Champ ajouté : case à cocher "Confirmation du duo"
+    // ✅ Case à cocher activée
     "Confirmation du duo": {
-      checkbox: true   // ← coche automatiquement la case
+      checkbox: true
     }
   };
 }
@@ -131,6 +132,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // Ignorer suppressions (on ne supprime pas en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
@@ -140,6 +142,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // Filtrer sur KanbanCategory = "Notion"
     if (kanban !== "Notion") {
       console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
       return res.status(200).json({
@@ -149,6 +152,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // 1) Créer la page en demandant le template par défaut
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
       template: { type: "default" }
@@ -174,6 +178,7 @@ app.post("/webhook", async (req, res) => {
     const createdPageId = createData.id;
     console.log("✅ Page créée (id) :", createdPageId);
 
+    // 2) PATCH : mettre à jour les propriétés (y compris checkbox)
     const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
     const updatePayload = { properties: propertiesToUpdate };
 
@@ -194,6 +199,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // 3) Couverture si image
     const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
     if (coverUrl) {
       try {
@@ -221,7 +227,7 @@ app.post("/webhook", async (req, res) => {
       status: "success",
       notion_page_id: createdPageId,
       pictogram: "🟢",
-      message: "Annonce ajoutée à Notion"
+      message: "Annonce ajoutée à Notion (Confirmation du duo cochée)"
     });
 
   } catch (err) {
