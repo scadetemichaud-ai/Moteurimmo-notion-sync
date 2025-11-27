@@ -15,20 +15,49 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
+  // version récente pour template / pages.update
   "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
+function translateType(raw) {
+  if (!raw) return "Type inconnu";
+  const r = String(raw).toLowerCase();
+  const map = {
+    house: "Maison",
+    apartment: "Appartement",
+    flat: "Appartement",
+    building: "Immeuble",
+    farm: "Ferme",
+    land: "Terrain",
+    studio: "Studio",
+    duplex: "Duplex",
+    villa: "Villa",
+    room: "Chambre",
+    lot: "Lot"
+    // ajoute ici d'autres mappings si besoin
+  };
+  if (map[r]) return map[r];
+  // fallback : capitalise la première lettre
+  return r.charAt(0).toUpperCase() + r.slice(1);
+}
+
 function buildPropertiesFromSaved(saved, savedAd) {
+  // saved = savedAd.ad
   const comment = savedAd?.comment ?? "";
+  const city = (saved.location?.city || "").toString();
+  // preferer category (house, apartment...), sinon type (sale/rent) mais sale n'est pas utile -> fallback sur title
+  const rawType = saved.category || saved.type || saved.title || "";
+  const typeLabel = translateType(rawType);
+  const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
   return {
-    // 🔥 Projet = type de bien
+    // Projet must be title type
     "Projet": {
       title: [
         {
           type: "text",
-          text: { content: saved.type || "Type inconnu" }
+          text: { content: projetValue }
         }
       ]
     },
@@ -41,6 +70,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
 
     "Surface Terrain": { number: saved.landSurface ?? null },
 
+    // Intérêt initial : texte provenant de savedAd.comment
     "Intérêt initial": {
       rich_text: [{
         type: "text",
@@ -48,17 +78,19 @@ function buildPropertiesFromSaved(saved, savedAd) {
       }]
     },
 
+    // Secteur = ville
     "Secteur": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: city }
       }]
     },
 
+    // Adresse = ville (tu peux adapter si tu veux full address)
     "Adresse": {
       rich_text: [{
         type: "text",
-        text: { content: (saved.location?.city || "").toString() }
+        text: { content: city }
       }]
     },
 
@@ -106,6 +138,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // Ignorer les suppressions (on ne supprime pas en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
@@ -115,6 +148,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // Filtrer sur KanbanCategory = "Notion"
     if (kanban !== "Notion") {
       console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
       return res.status(200).json({
@@ -124,8 +158,10 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // --- 1) Créer la page en demandant le template par défaut ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
+      // demande d'application du template par défaut
       template: { type: "default" }
     };
 
@@ -149,7 +185,9 @@ app.post("/webhook", async (req, res) => {
     const createdPageId = createData.id;
     console.log("✅ Page créée (id) :", createdPageId);
 
+    // --- 2) PATCH : mettre à jour les propriétés (on utilise savedAd.comment ici) ---
     const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
+
     const updatePayload = { properties: propertiesToUpdate };
 
     console.log("🔁 Mise à jour des propriétés de la page...", updatePayload);
@@ -169,6 +207,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
+    // --- 3) Mettre la couverture si une image existe ---
     const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
     if (coverUrl) {
       try {
