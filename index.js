@@ -15,36 +15,14 @@ const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
 const NOTION_HEADERS = {
   "Authorization": `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  // Version récente utilisée précédemment
+  // Version récente pour template / pages.update
   "Notion-Version": "2025-09-03"
 };
 
 // --- HELPERS ---
-function humanizeCategory(cat) {
-  if (!cat) return "Bien";
-  const map = {
-    house: "Maison",
-    apartment: "Appartement",
-    building: "Immeuble",
-    land: "Terrain",
-    farm: "Ferme",
-    room: "Chambre",
-    villa: "Villa",
-    studio: "Studio",
-    other: "Bien",
-    commerce: "Local commercial"
-  };
-  const key = String(cat).toLowerCase();
-  return map[key] || (key.charAt(0).toUpperCase() + key.slice(1));
-}
-
 function buildPropertiesFromSaved(saved, savedAd) {
   // saved = savedAd.ad
-  const comment = savedAd?.comment ?? ""; // commentaire (ex: "Voir comment cette maison est divisible")
-  const city = (saved.location?.city || "").toString();
-  const categoryLabel = humanizeCategory(saved.category || saved.type || "");
-  const projetText = `${categoryLabel}${city ? " " + city : ""}`.trim();
-
+  const comment = savedAd?.comment ?? ""; // <-- IMPORTANT: le commentaire est dans savedAd.comment
   return {
     "Annonce": { url: saved.url || null },
 
@@ -58,15 +36,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Intérêt initial": {
       rich_text: [{
         type: "text",
-        text: { content: String(comment || "") }
-      }]
-    },
-
-    // Projet : TypeBien + Ville (ex: "Immeuble Macon")
-    "Projet": {
-      rich_text: [{
-        type: "text",
-        text: { content: projetText }
+        text: { content: String(comment) }
       }]
     },
 
@@ -74,7 +44,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Secteur": {
       rich_text: [{
         type: "text",
-        text: { content: city }
+        text: { content: (saved.location?.city || "").toString() }
       }]
     },
 
@@ -82,7 +52,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Adresse": {
       rich_text: [{
         type: "text",
-        text: { content: city }
+        text: { content: (saved.location?.city || "").toString() }
       }]
     },
 
@@ -130,7 +100,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // Ignorer les suppressions (ne pas supprimer en Notion)
+    // Ignorer les suppressions
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
@@ -153,6 +123,7 @@ app.post("/webhook", async (req, res) => {
     // --- 1) Créer la page en demandant le template par défaut ---
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
+      // demande d'application du template par défaut
       template: { type: "default" }
     };
 
@@ -178,6 +149,7 @@ app.post("/webhook", async (req, res) => {
 
     // --- 2) PATCH : mettre à jour les propriétés (on utilise savedAd.comment ici) ---
     const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
+
     const updatePayload = { properties: propertiesToUpdate };
 
     console.log("🔁 Mise à jour des propriétés de la page...", updatePayload);
