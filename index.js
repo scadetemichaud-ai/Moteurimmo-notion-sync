@@ -45,7 +45,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const rawType = saved.category || saved.type || saved.title || "";
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
-  
+
   return {
     // Projet (title)
     "Projet": {
