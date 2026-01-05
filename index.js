@@ -1,217 +1,104 @@
-import express from "express";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
-
-const app = express();
-app.use(bodyParser.json());
-
-// --- ENV VARIABLES ---
-const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
-
-// --- NOTION CONFIG ---
-const NOTION_CREATE_URL = "https://api.notion.com/v1/pages";
-const NOTION_PAGE_URL = (pageId) =>
-  `https://api.notion.com/v1/pages/${pageId}`;
-
-const NOTION_HEADERS = {
-  Authorization: `Bearer ${NOTION_TOKEN}`,
-  "Content-Type": "application/json",
-  "Notion-Version": "2025-09-03",
-};
-
-// --- HELPERS ---
-
-function translateType(raw) {
-  if (!raw) return "Type inconnu";
-  const r = String(raw).toLowerCase();
-  const map = {
-    house: "Maison",
-    apartment: "Appartement",
-    flat: "Appartement",
-    building: "Immeuble",
-    block: "Immeuble",
-    farm: "Ferme",
-    land: "Terrain",
-    studio: "Studio",
-    duplex: "Duplex",
-    villa: "Villa",
-    room: "Chambre",
-    lot: "Lot",
-  };
-  return map[r] || r.charAt(0).toUpperCase() + r.slice(1);
-}
-
-// 🧠 Extraction nom agent depuis la description
 function extractAgentName(description = "") {
   const match = description.match(
-    /([A-ZÉÈÀÇ][a-zéèàç]+(?:\s[A-Z][A-ZÉÈÀÇ]+)+)/
+    /([A-ZÀ-Ÿ][a-zà-ÿ]+(?:[-\s][A-ZÀ-Ÿ][a-zà-ÿ]+)*\s[A-ZÀ-Ÿ]{2,})/
   );
   return match ? match[1].trim() : "";
 }
 
-// 🧠 Extraction téléphone FR depuis la description
 function extractPhone(description = "") {
   const match = description.match(
-    /(\+33\s?|0)([1-9])([\s.-]?\d{2}){4}/
+    /(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/
   );
   return match ? match[0].replace(/\s+/g, "") : "";
 }
 
-// 📅 Date du jour (YYYY-MM-DD)
+function extractRSAC(description = "") {
+  const match = description.match(
+    /RSAC\s*(?:de\s*[A-Za-zÀ-ÿ\s-]+)?\s*(\d{9})/
+  );
+  return match ? match[1] : "";
+}
+
 function todayISO() {
   return new Date().toISOString().split("T")[0];
 }
 
-// --- PROPERTIES BUILDER ---
 function buildPropertiesFromSaved(saved, savedAd) {
-  const comment = savedAd?.comment ?? "";
-  const city = (saved.location?.city || "").toString();
+  const ad = savedAd?.ad || {};
+  const description = ad.description || "";
 
-  const rawType = saved.category || saved.type || saved.title || "";
+  const comment = savedAd?.comment ?? "";
+  const city = ad.location?.city || "";
+
+  const rawType = ad.category || ad.type || ad.title || "";
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : typeLabel;
 
-  const description = saved.description || "";
-
-  // 🔥 LOGIQUE CORRECTE
   const agentName =
-    saved.publisher?.name && saved.publisher.name.trim()
-      ? saved.publisher.name
-      : extractAgentName(description);
+    ad.publisher?.name ||
+    extractAgentName(description);
 
   const agentPhone =
-    saved.publisher?.phone && saved.publisher.phone.trim()
-      ? saved.publisher.phone
-      : extractPhone(description);
+    ad.publisher?.phone ||
+    extractPhone(description);
+
+  const rsac = extractRSAC(description);
+  const phoneMissing = !agentPhone;
 
   return {
     "Projet": {
-      title: [{ type: "text", text: { content: projetValue } }],
+      title: [{ type: "text", text: { content: projetValue } }]
     },
 
-    "Annonce": { url: saved.url || null },
-
-    "Prix affiché": { number: saved.price ?? null },
-
-    "Surface Habitable": { number: saved.surface ?? null },
-
-    "Surface Terrain": { number: saved.landSurface ?? null },
+    "Annonce": { url: ad.url || null },
+    "Prix affiché": { number: ad.price ?? null },
+    "Surface Habitable": { number: ad.surface ?? null },
+    "Surface Terrain": { number: ad.landSurface ?? null },
 
     "Intérêt initial": {
-      rich_text: [{ type: "text", text: { content: String(comment) } }],
+      rich_text: [{ type: "text", text: { content: String(comment) } }]
     },
 
     "Secteur": {
-      rich_text: [{ type: "text", text: { content: city } }],
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Adresse": {
-      rich_text: [{ type: "text", text: { content: city } }],
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Lettre du DPE": {
-      multi_select:
-        saved.energyGrade || saved.gasGrade
-          ? [{ name: saved.energyGrade || saved.gasGrade }]
-          : [],
+      multi_select: ad.energyGrade
+        ? [{ name: ad.energyGrade }]
+        : []
     },
 
     "Agence / AI": {
-      rich_text: [{ type: "text", text: { content: agentName } }],
+      rich_text: [
+        { type: "text", text: { content: agentName } }
+      ]
     },
 
     "Téléphone AI": {
-      rich_text: [{ type: "text", text: { content: agentPhone } }],
+      rich_text: [
+        { type: "text", text: { content: agentPhone } }
+      ]
+    },
+
+    "RSAC AI": {
+      rich_text: [
+        { type: "text", text: { content: rsac } }
+      ]
+    },
+
+    "Téléphone manquant": {
+      checkbox: phoneMissing
     },
 
     "Date de validation": {
-      date: { start: todayISO() },
+      date: { start: todayISO() }
     },
 
-    "Confirmation du duo": {
-      checkbox: true,
-    },
+    "Confirmation du duo": { checkbox: true }
   };
 }
-
-// --- TEST ROUTE ---
-app.get("/", (req, res) => res.json({ status: "OK" }));
-
-// --- MAIN WEBHOOK ---
-app.post("/webhook", async (req, res) => {
-  console.log("📩 Webhook reçu :", JSON.stringify(req.body, null, 2));
-
-  try {
-    const { event, savedAd } = req.body;
-    const saved = savedAd?.ad;
-    const kanban = savedAd?.kanbanCategory;
-
-    if (!savedAd || !saved) {
-      return res.status(400).json({ error: "Invalid payload" });
-    }
-
-    if (event?.toLowerCase().includes("deleted")) {
-      return res.status(200).json({ ignored: true });
-    }
-
-    if (kanban !== "Notion") {
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 1️⃣ CREATE PAGE
-    const createRes = await fetch(NOTION_CREATE_URL, {
-      method: "POST",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify({
-        parent: { database_id: NOTION_DATABASE_ID },
-        template: { type: "default" },
-      }),
-    });
-
-    const createData = await createRes.json();
-    if (!createRes.ok) {
-      return res.status(500).json(createData);
-    }
-
-    const pageId = createData.id;
-
-    // 2️⃣ UPDATE PROPERTIES
-    await fetch(NOTION_PAGE_URL(pageId), {
-      method: "PATCH",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify({
-        properties: buildPropertiesFromSaved(saved, savedAd),
-      }),
-    });
-
-    // 3️⃣ COVER
-    const coverUrl =
-      saved.pictureUrl ||
-      (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
-
-    if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(pageId), {
-        method: "PATCH",
-        headers: NOTION_HEADERS,
-        body: JSON.stringify({
-          cover: { type: "external", external: { url: coverUrl } },
-        }),
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      notion_page_id: pageId,
-    });
-  } catch (err) {
-    console.error("🔥 ERREUR :", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// --- SERVER ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
-);
