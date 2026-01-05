@@ -39,11 +39,6 @@ function translateType(raw) {
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
 
-function cleanPhone(phone) {
-  if (!phone) return null;
-  return String(phone).replace(/\s+/g, "");
-}
-
 function buildPropertiesFromSaved(saved, savedAd) {
   const comment = savedAd?.comment ?? "";
   const city = (saved.location?.city || "").toString();
@@ -51,11 +46,10 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
-  // 📅 Date du jour sans heure
+  // 📅 Date du jour (YYYY-MM-DD)
   const today = new Date().toISOString().split("T")[0];
 
   return {
-    // --- TITLE ---
     "Projet": {
       title: [{ type: "text", text: { content: projetValue } }]
     },
@@ -86,20 +80,15 @@ function buildPropertiesFromSaved(saved, savedAd) {
         : []
     },
 
-    // ✅ NOM AGENCE / AGENT
     "Agence / AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.name || "" }
-      }]
+      rich_text: [{ type: "text", text: { content: saved.publisher?.name || "" } }]
     },
 
-    // ✅ TÉLÉPHONE (TYPE PHONE NOTION)
     "Téléphone AI": {
-      phone: cleanPhone(saved.publisher?.phone)
+      rich_text: [{ type: "text", text: { content: saved.publisher?.phone || "" } }]
     },
 
-    // ✅ DATE DE VALIDATION
+    // ✅ NOUVEAU : Date de validation
     "Date de validation": {
       date: { start: today }
     }
@@ -123,15 +112,17 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Invalid payload" });
     }
 
+    // Ignorer suppressions
     if (event && event.toLowerCase().includes("deleted")) {
       return res.status(200).json({ ignored: true });
     }
 
+    // Filtrer KanbanCategory
     if (kanban !== "Notion") {
       return res.status(200).json({ ignored: true });
     }
 
-    // 1) CREATE
+    // 1) Création page (template par défaut)
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
@@ -142,11 +133,13 @@ app.post("/webhook", async (req, res) => {
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) return res.status(500).json(createData);
+    if (!createRes.ok) {
+      return res.status(500).json(createData);
+    }
 
     const pageId = createData.id;
 
-    // 2) UPDATE PROPERTIES
+    // 2) Mise à jour des propriétés
     await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
@@ -155,8 +148,11 @@ app.post("/webhook", async (req, res) => {
       })
     });
 
-    // 3) COVER
-    const coverUrl = saved.pictureUrl || saved.pictureUrls?.[0];
+    // 3) Couverture
+    const coverUrl =
+      saved.pictureUrl ||
+      (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+
     if (coverUrl) {
       await fetch(NOTION_PAGE_URL(pageId), {
         method: "PATCH",
@@ -167,7 +163,10 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    return res.status(200).json({ status: "success", notion_page_id: pageId });
+    return res.status(200).json({
+      status: "success",
+      notion_page_id: pageId
+    });
 
   } catch (err) {
     console.error(err);
@@ -177,4 +176,6 @@ app.post("/webhook", async (req, res) => {
 
 // --- SERVER ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
+);
