@@ -45,7 +45,6 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const rawType = saved.category || saved.type || saved.title || "";
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
-  const today = new Date().toISOString().split("T")[0];
   
   return {
     // Projet (title)
@@ -54,12 +53,6 @@ function buildPropertiesFromSaved(saved, savedAd) {
         { type: "text", text: { content: projetValue } }
       ]
     },
-
-  "Date de validation": {
-    date: {
-      start: today
-    }
-  },
 
     "Annonce": { url: saved.url || null },
 
