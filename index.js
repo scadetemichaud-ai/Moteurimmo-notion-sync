@@ -46,9 +46,6 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
-  // 📅 Date du jour (YYYY-MM-DD)
-  const today = new Date().toISOString().split("T")[0];
-
   return {
     // Projet (title)
     "Projet": {
@@ -106,11 +103,9 @@ function buildPropertiesFromSaved(saved, savedAd) {
       }]
     },
 
-    // ✅ NOUVEAU CHAMP
-    "Date de validation": {
-      date: {
-        start: today
-      }
+    // ✅ Case à cocher activée
+    "Confirmation du duo": {
+      checkbox: true
     }
   };
 }
@@ -137,9 +132,114 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // Ignorer suppressions
+    // Ignorer suppressions (on ne supprime pas en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
       console.log("⏭️ Suppression ignorée");
       return res.status(200).json({
         ignored: true,
         pictogram: "⚪",
+        message: "Suppression ignorée"
+      });
+    }
+
+    // Filtrer sur KanbanCategory = "Notion"
+    if (kanban !== "Notion") {
+      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
+        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
+      });
+    }
+
+    // 1) Créer la page en demandant le template par défaut
+    const createPayload = {
+      parent: { database_id: NOTION_DATABASE_ID },
+      template: { type: "default" }
+    };
+
+    console.log("📤 Création page (template default) sur Notion...");
+    const createRes = await fetch(NOTION_CREATE_URL, {
+      method: "POST",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(createPayload)
+    });
+
+    const createData = await createRes.json();
+    if (!createRes.ok) {
+      console.error("❌ Erreur lors de la création (Notion) :", createData);
+      return res.status(500).json({
+        error: createData,
+        pictogram: "🔴",
+        message: "Erreur lors de la création Notion"
+      });
+    }
+
+    const createdPageId = createData.id;
+    console.log("✅ Page créée (id) :", createdPageId);
+
+    // 2) PATCH : mettre à jour les propriétés (y compris checkbox)
+    const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
+    const updatePayload = { properties: propertiesToUpdate };
+
+    console.log("🔁 Mise à jour des propriétés...", updatePayload);
+    const updateRes = await fetch(NOTION_PAGE_URL(createdPageId), {
+      method: "PATCH",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify(updatePayload)
+    });
+
+    const updateData = await updateRes.json();
+    if (!updateRes.ok) {
+      console.error("❌ Erreur mise à jour (Notion) :", updateData);
+      return res.status(500).json({
+        error: updateData,
+        pictogram: "🔴",
+        message: "Erreur lors de la mise à jour des propriétés"
+      });
+    }
+
+    // 3) Couverture si image
+    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+    if (coverUrl) {
+      try {
+        const coverRes = await fetch(NOTION_PAGE_URL(createdPageId), {
+          method: "PATCH",
+          headers: NOTION_HEADERS,
+          body: JSON.stringify({
+            cover: { type: "external", external: { url: coverUrl } }
+          })
+        });
+
+        if (!coverRes.ok) {
+          const coverData = await coverRes.json();
+          console.warn("⚠️ Impossible de mettre la couverture :", coverData);
+        } else {
+          console.log("🖼️ Couverture définie.");
+        }
+      } catch (err) {
+        console.warn("⚠️ Erreur lors de la mise de la couverture :", err.message);
+      }
+    }
+
+    console.log("🎉 Page Notion mise à jour :", createdPageId);
+    return res.status(200).json({
+      status: "success",
+      notion_page_id: createdPageId,
+      pictogram: "🟢",
+      message: "Annonce ajoutée à Notion (Confirmation du duo cochée)"
+    });
+
+  } catch (err) {
+    console.error("🔥 ERREUR serveur :", err);
+    return res.status(500).json({
+      error: err.message,
+      pictogram: "🔴",
+      message: "Erreur serveur"
+    });
+  }
+});
+
+// --- SERVER ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
