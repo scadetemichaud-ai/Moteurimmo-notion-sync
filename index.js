@@ -1,3 +1,17 @@
+function extractAgentName(description = "") {
+  const match = description.match(/([A-ZÉÈÀÇ][a-zéèàç]+\\s[A-ZÉÈÀÇ][a-zéèàç]+)/);
+  return match ? match[1] : "";
+}
+
+function extractPhone(description = "") {
+  const match = description.match(/(0[1-9](?:[ .-]?\\d{2}){4})/);
+  return match ? match[1] : "";
+}
+
+function todayISO() {
+  return new Date().toISOString().split("T")[0];
+}
+
 function buildPropertiesFromSaved(saved, savedAd) {
   const comment = savedAd?.comment ?? "";
   const city = (saved.location?.city || "").toString();
@@ -5,21 +19,14 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
-  // ✅ Agent immobilier (fallbacks réels MoteurImmo)
+  const description = saved.description || "";
   const agentName =
-    saved.publisher?.contactName ||
     saved.publisher?.name ||
-    saved.contact?.name ||
-    "";
+    extractAgentName(description);
 
   const agentPhone =
-    saved.publisher?.contactPhone ||
     saved.publisher?.phone ||
-    saved.contact?.phone ||
-    "";
-
-  // ✅ Date du jour
-  const today = new Date().toISOString().split("T")[0];
+    extractPhone(description);
 
   return {
     "Projet": {
@@ -49,32 +56,18 @@ function buildPropertiesFromSaved(saved, savedAd) {
         : []
     },
 
-    // ✅ AGENT IMMO — FONCTIONNE
     "Agence / AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: agentName }
-      }]
+      rich_text: [{ type: "text", text: { content: agentName } }]
     },
 
-    // ✅ TÉLÉPHONE — FONCTIONNE
     "Téléphone AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: agentPhone }
-      }]
+      rich_text: [{ type: "text", text: { content: agentPhone } }]
     },
 
-    // ✅ DATE — FONCTIONNE
     "Date de validation": {
-      date: {
-        start: today
-      }
+      date: { start: todayISO() }
     },
 
-    // ✅ inchangé
-    "Confirmation du duo": {
-      checkbox: true
-    }
+    "Confirmation du duo": { checkbox: true }
   };
 }
