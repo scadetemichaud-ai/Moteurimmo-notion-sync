@@ -39,6 +39,11 @@ function translateType(raw) {
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
 
+function cleanPhone(phone) {
+  if (!phone) return null;
+  return String(phone).replace(/\s+/g, "");
+}
+
 function buildPropertiesFromSaved(saved, savedAd) {
   const comment = savedAd?.comment ?? "";
   const city = (saved.location?.city || "").toString();
@@ -46,15 +51,13 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const typeLabel = translateType(rawType);
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
-  // 📅 Date du jour au format YYYY-MM-DD (sans heure)
+  // 📅 Date du jour sans heure
   const today = new Date().toISOString().split("T")[0];
 
   return {
-    // Projet (title)
+    // --- TITLE ---
     "Projet": {
-      title: [
-        { type: "text", text: { content: projetValue } }
-      ]
+      title: [{ type: "text", text: { content: projetValue } }]
     },
 
     "Annonce": { url: saved.url || null },
@@ -66,24 +69,15 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Surface Terrain": { number: saved.landSurface ?? null },
 
     "Intérêt initial": {
-      rich_text: [{
-        type: "text",
-        text: { content: String(comment) }
-      }]
+      rich_text: [{ type: "text", text: { content: String(comment) } }]
     },
 
     "Secteur": {
-      rich_text: [{
-        type: "text",
-        text: { content: city }
-      }]
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Adresse": {
-      rich_text: [{
-        type: "text",
-        text: { content: city }
-      }]
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Lettre du DPE": {
@@ -92,6 +86,7 @@ function buildPropertiesFromSaved(saved, savedAd) {
         : []
     },
 
+    // ✅ NOM AGENCE / AGENT
     "Agence / AI": {
       rich_text: [{
         type: "text",
@@ -99,18 +94,14 @@ function buildPropertiesFromSaved(saved, savedAd) {
       }]
     },
 
+    // ✅ TÉLÉPHONE (TYPE PHONE NOTION)
     "Téléphone AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.phone || "" }
-      }]
+      phone: cleanPhone(saved.publisher?.phone)
     },
 
-    // ✅ NOUVEAU CHAMP : Date de validation
+    // ✅ DATE DE VALIDATION
     "Date de validation": {
-      date: {
-        start: today
-      }
+      date: { start: today }
     }
   };
 }
@@ -129,68 +120,45 @@ app.post("/webhook", async (req, res) => {
     const kanban = savedAd?.kanbanCategory;
 
     if (!savedAd || !saved) {
-      console.error("❌ Données invalides reçues");
-      return res.status(400).json({
-        error: "Invalid payload",
-        pictogram: "🔴",
-        message: "Payload invalide"
-      });
+      return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // Ignorer les suppressions
     if (event && event.toLowerCase().includes("deleted")) {
-      console.log("⏭️ Suppression ignorée");
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: "Suppression ignorée"
-      });
+      return res.status(200).json({ ignored: true });
     }
 
-    // Filtrer sur KanbanCategory = "Notion"
     if (kanban !== "Notion") {
-      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
-      });
+      return res.status(200).json({ ignored: true });
     }
 
-    // 1) Création page avec template par défaut
-    const createPayload = {
-      parent: { database_id: NOTION_DATABASE_ID },
-      template: { type: "default" }
-    };
-
-    console.log("📤 Création page (template default) sur Notion...");
+    // 1) CREATE
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
-      body: JSON.stringify(createPayload)
+      body: JSON.stringify({
+        parent: { database_id: NOTION_DATABASE_ID },
+        template: { type: "default" }
+      })
     });
 
     const createData = await createRes.json();
-    if (!createRes.ok) {
-      console.error("❌ Erreur création Notion :", createData);
-      return res.status(500).json({ error: createData });
-    }
+    if (!createRes.ok) return res.status(500).json(createData);
 
-    const createdPageId = createData.id;
-    console.log("✅ Page créée :", createdPageId);
+    const pageId = createData.id;
 
-    // 2) Mise à jour des propriétés
-    const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
-    await fetch(NOTION_PAGE_URL(createdPageId), {
+    // 2) UPDATE PROPERTIES
+    await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
-      body: JSON.stringify({ properties: propertiesToUpdate })
+      body: JSON.stringify({
+        properties: buildPropertiesFromSaved(saved, savedAd)
+      })
     });
 
-    // 3) Couverture
-    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+    // 3) COVER
+    const coverUrl = saved.pictureUrl || saved.pictureUrls?.[0];
     if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(createdPageId), {
+      await fetch(NOTION_PAGE_URL(pageId), {
         method: "PATCH",
         headers: NOTION_HEADERS,
         body: JSON.stringify({
@@ -199,20 +167,14 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    console.log("🎉 Import Notion terminé");
-    return res.status(200).json({
-      status: "success",
-      notion_page_id: createdPageId
-    });
+    return res.status(200).json({ status: "success", notion_page_id: pageId });
 
   } catch (err) {
-    console.error("🔥 ERREUR serveur :", err);
+    console.error(err);
     return res.status(500).json({ error: err.message });
   }
 });
 
 // --- SERVER ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
