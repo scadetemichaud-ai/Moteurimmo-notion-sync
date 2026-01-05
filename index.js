@@ -50,8 +50,11 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const today = new Date().toISOString().split("T")[0];
 
   return {
+    // Projet (title)
     "Projet": {
-      title: [{ type: "text", text: { content: projetValue } }]
+      title: [
+        { type: "text", text: { content: projetValue } }
+      ]
     },
 
     "Annonce": { url: saved.url || null },
@@ -63,15 +66,24 @@ function buildPropertiesFromSaved(saved, savedAd) {
     "Surface Terrain": { number: saved.landSurface ?? null },
 
     "Intérêt initial": {
-      rich_text: [{ type: "text", text: { content: String(comment) } }]
+      rich_text: [{
+        type: "text",
+        text: { content: String(comment) }
+      }]
     },
 
     "Secteur": {
-      rich_text: [{ type: "text", text: { content: city } }]
+      rich_text: [{
+        type: "text",
+        text: { content: city }
+      }]
     },
 
     "Adresse": {
-      rich_text: [{ type: "text", text: { content: city } }]
+      rich_text: [{
+        type: "text",
+        text: { content: city }
+      }]
     },
 
     "Lettre du DPE": {
@@ -81,16 +93,24 @@ function buildPropertiesFromSaved(saved, savedAd) {
     },
 
     "Agence / AI": {
-      rich_text: [{ type: "text", text: { content: saved.publisher?.name || "" } }]
+      rich_text: [{
+        type: "text",
+        text: { content: saved.publisher?.name || "" }
+      }]
     },
 
     "Téléphone AI": {
-      rich_text: [{ type: "text", text: { content: saved.publisher?.phone || "" } }]
+      rich_text: [{
+        type: "text",
+        text: { content: saved.publisher?.phone || "" }
+      }]
     },
 
-    // ✅ NOUVEAU : Date de validation
+    // ✅ NOUVEAU CHAMP
     "Date de validation": {
-      date: { start: today }
+      date: {
+        start: today
+      }
     }
   };
 }
@@ -109,73 +129,17 @@ app.post("/webhook", async (req, res) => {
     const kanban = savedAd?.kanbanCategory;
 
     if (!savedAd || !saved) {
-      return res.status(400).json({ error: "Invalid payload" });
+      console.error("❌ Données invalides reçues");
+      return res.status(400).json({
+        error: "Invalid payload",
+        pictogram: "🔴",
+        message: "Payload invalide"
+      });
     }
 
     // Ignorer suppressions
     if (event && event.toLowerCase().includes("deleted")) {
-      return res.status(200).json({ ignored: true });
-    }
-
-    // Filtrer KanbanCategory
-    if (kanban !== "Notion") {
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 1) Création page (template par défaut)
-    const createRes = await fetch(NOTION_CREATE_URL, {
-      method: "POST",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify({
-        parent: { database_id: NOTION_DATABASE_ID },
-        template: { type: "default" }
-      })
-    });
-
-    const createData = await createRes.json();
-    if (!createRes.ok) {
-      return res.status(500).json(createData);
-    }
-
-    const pageId = createData.id;
-
-    // 2) Mise à jour des propriétés
-    await fetch(NOTION_PAGE_URL(pageId), {
-      method: "PATCH",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify({
-        properties: buildPropertiesFromSaved(saved, savedAd)
-      })
-    });
-
-    // 3) Couverture
-    const coverUrl =
-      saved.pictureUrl ||
-      (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
-
-    if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(pageId), {
-        method: "PATCH",
-        headers: NOTION_HEADERS,
-        body: JSON.stringify({
-          cover: { type: "external", external: { url: coverUrl } }
-        })
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      notion_page_id: pageId
-    });
-
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// --- SERVER ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
-);
+      console.log("⏭️ Suppression ignorée");
+      return res.status(200).json({
+        ignored: true,
+        pictogram: "⚪",
