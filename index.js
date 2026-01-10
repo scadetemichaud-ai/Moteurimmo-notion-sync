@@ -1,197 +1,211 @@
 import express from "express";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
+import { Client } from "@notionhq/client";
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// --- ENV VARIABLES ---
-const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
+/* =========================
+   CONFIG
+========================= */
 
-// --- NOTION CONFIG ---
-const NOTION_CREATE_URL = "https://api.notion.com/v1/pages";
-const NOTION_PAGE_URL = (pageId) => `https://api.notion.com/v1/pages/${pageId}`;
-const NOTION_HEADERS = {
-  "Authorization": `Bearer ${NOTION_TOKEN}`,
-  "Content-Type": "application/json",
-  "Notion-Version": "2025-09-03"
-};
+const notion = new Client({
+  auth: process.env.NOTION_TOKEN,
+});
 
-// --- HELPERS ---
-function translateType(raw) {
-  if (!raw) return "Type inconnu";
-  const r = String(raw).toLowerCase();
-  const map = {
-    house: "Maison",
-    apartment: "Appartement",
-    flat: "Appartement",
-    building: "Immeuble",
-    farm: "Ferme",
-    land: "Terrain",
-    studio: "Studio",
-    duplex: "Duplex",
-    villa: "Villa",
-    room: "Chambre",
-    lot: "Lot"
-  };
-  if (map[r]) return map[r];
-  return r.charAt(0).toUpperCase() + r.slice(1);
+const DATABASE_ID = process.env.NOTION_DATABASE_ID;
+
+/* =========================
+   UTILS
+========================= */
+
+function todayISO() {
+  return new Date().toISOString().split("T")[0];
 }
 
-function buildPropertiesFromSaved(saved, savedAd) {
-  const comment = savedAd?.comment ?? "";
-  const city = (saved.location?.city || "").toString();
-  const rawType = saved.category || saved.type || saved.title || "";
-  const typeLabel = translateType(rawType);
-  const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
-
-  return {
-    "Projet": {
-      title: [{ type: "text", text: { content: projetValue } }]
-    },
-
-    "Annonce": { url: saved.url || null },
-
-    "Prix affiché": { number: saved.price ?? null },
-
-    "Surface Habitable": { number: saved.surface ?? null },
-
-    "Surface Terrain": { number: saved.landSurface ?? null },
-
-    "Intérêt initial": {
-      rich_text: [{ type: "text", text: { content: String(comment) } }]
-    },
-
-    "Secteur": {
-      rich_text: [{ type: "text", text: { content: city } }]
-    },
-
-    "Adresse": {
-      rich_text: [{ type: "text", text: { content: city } }]
-    },
-
-    "Lettre du DPE": {
-      multi_select: (saved.energyGrade || saved.gasGrade)
-        ? [{ name: saved.energyGrade || saved.gasGrade }]
-        : []
-    },
-
-    "Agence / AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.name || "" }
-      }]
-    },
-
-    "Téléphone AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.phone || "" }
-      }]
-    },
-
-    "Confirmation du duo": {
-      checkbox: true
-    }
-  };
+function currentYear() {
+  return new Date().getFullYear();
 }
 
-// --- TEST ROUTE ---
-app.get("/", (req, res) => res.json({ status: "OK" }));
+async function generateCounter() {
+  const year = currentYear().toString();
 
-// --- MAIN WEBHOOK ---
+  const response = await notion.databases.query({
+    database_id: DATABASE_ID,
+    filter: {
+      property: "Projet",
+      title: { starts_with: year },
+    },
+  });
+
+  const index = response.results.length + 1;
+  return `${year}-${String(index).padStart(3, "0")}`;
+}
+
+/* =========================
+   EXTRACTION AGENCE / TEL
+========================= */
+
+function extractAgentName(description = "") {
+  const match = description.match(
+    /(présenté par|vous est présenté par)\s+([^,\n]+)/i
+  );
+  return match ? match[2].trim() : "";
+}
+
+function extractPhone(description = "") {
+  const match = description.match(
+    /(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/
+  );
+  return match ? match[0] : "";
+}
+
+function getAgencyName(ad) {
+  if (ad.publisher?.name) return ad.publisher.name;
+
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.name) return dup.publisher.name;
+  }
+
+  return extractAgentName(ad.description || "");
+}
+
+function getAgencyPhone(ad) {
+  if (ad.publisher?.phone) return ad.publisher.phone;
+
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.phone) return dup.publisher.phone;
+  }
+
+  return extractPhone(ad.description || "");
+}
+
+/* =========================
+   AUTRES HELPERS
+========================= */
+
+function getBestUrl(ad) {
+  const leboncoin = ad.duplicates?.find(d => d.origin === "leboncoin");
+  if (leboncoin?.url) return leboncoin.url;
+
+  const bienici = ad.duplicates?.find(d => d.origin === "bienici");
+  if (bienici?.url) return bienici.url;
+
+  return ad.url ?? null;
+}
+
+function getAddress(ad) {
+  if (!ad.location) return "";
+  const { postalCode, city } = ad.location;
+  return [postalCode, city].filter(Boolean).join(" ");
+}
+
+function getCover(ad) {
+  const img = ad.pictureUrls?.[0] || ad.pictureUrl;
+  return img ? { external: { url: img } } : undefined;
+}
+
+/* =========================
+   WEBHOOK
+========================= */
+
 app.post("/webhook", async (req, res) => {
-  console.log("📩 Webhook reçu :", JSON.stringify(req.body, null, 2));
-
   try {
-    const event = req.body.event;
-    const savedAd = req.body.savedAd;
-    const saved = savedAd?.ad;
-    const kanban = savedAd?.kanbanCategory;
-
-    if (!savedAd || !saved) {
-      return res.status(400).json({ error: "Invalid payload" });
+    const savedAd = req.body?.savedAd;
+    if (!savedAd || savedAd.kanbanCategory !== "Notion") {
+      return res.sendStatus(200);
     }
 
-    if (event && event.toLowerCase().includes("deleted")) {
-      return res.status(200).json({ ignored: true });
-    }
+    const ad = savedAd.ad;
+    if (!ad) return res.sendStatus(200);
 
-    if (kanban !== "Notion") {
-      return res.status(200).json({ ignored: true });
-    }
+    console.log("📩 Import annonce Notion");
 
-    // -------------------------------------------------
-    // ✅ CRÉATION DE LA PAGE AVEC LE TEMPLATE PAR DÉFAUT
-    // -------------------------------------------------
-    const createPayload = {
-      parent: { database_id: NOTION_DATABASE_ID },
-      template: { type: "default" }
-    };
+    /* =========================
+       1️⃣ CREATE PAGE (TEMPLATE "Nouvelle page")
+    ========================= */
 
-    const createRes = await fetch(NOTION_CREATE_URL, {
-      method: "POST",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify(createPayload)
+    const page = await notion.pages.create({
+      parent: { database_id: DATABASE_ID },
+
+      // ✅ TEMPLATE PAR DÉFAUT DU DATABASE
+      template: { type: "default" },
+
+      cover: getCover(ad),
+
+      properties: {
+        Projet: {
+          title: [{ text: { content: "Création…" } }],
+        },
+      },
     });
 
-    const createData = await createRes.json();
-    if (!createRes.ok) {
-      console.error("Erreur création Notion :", createData);
-      return res.status(500).json({ error: createData });
-    }
+    /* ⏳ micro-délai pour laisser Notion appliquer le template */
+    await new Promise(r => setTimeout(r, 500));
 
-    const pageId = createData.id;
+    /* =========================
+       2️⃣ UPDATE PROPERTIES
+    ========================= */
 
-    // --- UPDATE PROPERTIES ---
-    const updatePayload = {
-      properties: buildPropertiesFromSaved(saved, savedAd)
-    };
+    const title = await generateCounter();
 
-    const updateRes = await fetch(NOTION_PAGE_URL(pageId), {
-      method: "PATCH",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify(updatePayload)
+    await notion.pages.update({
+      page_id: page.id,
+      properties: {
+        Projet: {
+          title: [{ text: { content: title } }],
+        },
+
+        Annonce: { url: getBestUrl(ad) },
+
+        "Prix affiché": ad.price ? { number: ad.price } : null,
+
+        "Surface Habitable": ad.surface ? { number: ad.surface } : null,
+
+        "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
+
+        "Intérêt initial": savedAd.comment
+          ? { rich_text: [{ text: { content: savedAd.comment } }] }
+          : null,
+
+        Adresse: {
+          rich_text: [{ text: { content: getAddress(ad) } }],
+        },
+
+        "Date de validation": {
+          date: { start: todayISO() },
+        },
+
+        "Lettre du DPE": ad.energyGrade
+          ? { multi_select: [{ name: ad.energyGrade }] }
+          : null,
+
+        "Agence / AI": {
+          rich_text: [
+            { text: { content: getAgencyName(ad) || "" } },
+          ],
+        },
+
+        "Téléphone AI": {
+          rich_text: [
+            { text: { content: getAgencyPhone(ad) || "" } },
+          ],
+        },
+      },
     });
 
-    if (!updateRes.ok) {
-      const err = await updateRes.json();
-      console.error("Erreur update Notion :", err);
-      return res.status(500).json({ error: err });
-    }
-
-    // --- COVER IMAGE ---
-    const coverUrl =
-      saved.pictureUrl ||
-      (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
-
-    if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(pageId), {
-        method: "PATCH",
-        headers: NOTION_HEADERS,
-        body: JSON.stringify({
-          cover: {
-            type: "external",
-            external: { url: coverUrl }
-          }
-        })
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      notion_page_id: pageId
-    });
-
+    console.log("✅ Page Notion complète :", page.id);
+    res.sendStatus(200);
   } catch (err) {
-    console.error("🔥 Erreur serveur :", err);
-    return res.status(500).json({ error: err.message });
+    console.error("❌ ERREUR :", err);
+    res.sendStatus(500);
   }
 });
 
-// --- SERVER ---
+/* =========================
+   SERVER
+========================= */
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`🚀 Webhook actif sur le port ${PORT}`);
+});
