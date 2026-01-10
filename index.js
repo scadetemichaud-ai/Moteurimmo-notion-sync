@@ -1,4 +1,5 @@
 import express from "express";
+import fetch from "node-fetch";
 import { Client } from "@notionhq/client";
 
 const app = express();
@@ -13,6 +14,15 @@ const notion = new Client({
 });
 
 const DATABASE_ID = process.env.NOTION_DATABASE_ID;
+
+const NOTION_HEADERS = {
+  "Authorization": `Bearer ${process.env.NOTION_TOKEN}`,
+  "Content-Type": "application/json",
+  "Notion-Version": "2025-09-03"
+};
+
+const NOTION_CREATE_URL = "https://api.notion.com/v1/pages";
+const NOTION_PAGE_URL = (id) => `https://api.notion.com/v1/pages/${id}`;
 
 /* =========================
    UTILS
@@ -99,9 +109,8 @@ function getAddress(ad) {
   return [postalCode, city].filter(Boolean).join(" ");
 }
 
-function getCover(ad) {
-  const img = ad.pictureUrls?.[0] || ad.pictureUrl;
-  return img ? { external: { url: img } } : undefined;
+function getCoverUrl(ad) {
+  return ad.pictureUrls?.[0] || ad.pictureUrl || null;
 }
 
 /* =========================
@@ -121,26 +130,26 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Import annonce Notion");
 
     /* =========================
-       1️⃣ CREATE PAGE (TEMPLATE "Nouvelle page")
+       1️⃣ CREATE PAGE (TEMPLATE DEFAULT)
     ========================= */
 
-    const page = await notion.pages.create({
-      parent: { database_id: DATABASE_ID },
-
-      // ✅ UTILISATION DU MODÈLE PAR DÉFAUT "Nouvelle page"
-      template: { type: "default" },
-
-      cover: getCover(ad),
-
-      properties: {
-        Projet: {
-          title: [{ text: { content: "Création…" } }],
-        },
-      },
+    const createRes = await fetch(NOTION_CREATE_URL, {
+      method: "POST",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify({
+        parent: { database_id: DATABASE_ID },
+        template: { type: "default" }
+      })
     });
 
-    /* ⏳ micro-délai pour laisser Notion appliquer le template */
-    await new Promise(r => setTimeout(r, 500));
+    const createData = await createRes.json();
+    if (!createRes.ok) {
+      console.error("❌ Erreur création Notion :", createData);
+      return res.sendStatus(500);
+    }
+
+    const pageId = createData.id;
+    console.log("✅ Page créée avec template :", pageId);
 
     /* =========================
        2️⃣ UPDATE PROPERTIES
@@ -148,53 +157,71 @@ app.post("/webhook", async (req, res) => {
 
     const title = await generateCounter();
 
-    await notion.pages.update({
-      page_id: page.id,
-      properties: {
-        Projet: {
-          title: [{ text: { content: title } }],
-        },
+    await fetch(NOTION_PAGE_URL(pageId), {
+      method: "PATCH",
+      headers: NOTION_HEADERS,
+      body: JSON.stringify({
+        properties: {
+          Projet: {
+            title: [{ text: { content: title } }]
+          },
 
-        Annonce: { url: getBestUrl(ad) },
+          Annonce: { url: getBestUrl(ad) },
 
-        "Prix affiché": ad.price ? { number: ad.price } : null,
+          "Prix affiché": ad.price ? { number: ad.price } : null,
 
-        "Surface Habitable": ad.surface ? { number: ad.surface } : null,
+          "Surface Habitable": ad.surface ? { number: ad.surface } : null,
 
-        "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
+          "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
 
-        "Intérêt initial": savedAd.comment
-          ? { rich_text: [{ text: { content: savedAd.comment } }] }
-          : null,
+          "Intérêt initial": savedAd.comment
+            ? { rich_text: [{ text: { content: savedAd.comment } }] }
+            : null,
 
-        Adresse: {
-          rich_text: [{ text: { content: getAddress(ad) } }],
-        },
+          Adresse: {
+            rich_text: [{ text: { content: getAddress(ad) } }]
+          },
 
-        "Date de validation": {
-          date: { start: todayISO() },
-        },
+          "Date de validation": {
+            date: { start: todayISO() }
+          },
 
-        "Lettre du DPE": ad.energyGrade
-          ? { multi_select: [{ name: ad.energyGrade }] }
-          : null,
+          "Lettre du DPE": ad.energyGrade
+            ? { multi_select: [{ name: ad.energyGrade }] }
+            : null,
 
-        "Agence / AI": {
-          rich_text: [
-            { text: { content: getAgencyName(ad) || "" } },
-          ],
-        },
+          "Agence / AI": {
+            rich_text: [{ text: { content: getAgencyName(ad) } }]
+          },
 
-        "Téléphone AI": {
-          rich_text: [
-            { text: { content: getAgencyPhone(ad) || "" } },
-          ],
-        },
-      },
+          "Téléphone AI": {
+            rich_text: [{ text: { content: getAgencyPhone(ad) } }]
+          }
+        }
+      })
     });
 
-    console.log("✅ Page Notion complète :", page.id);
+    /* =========================
+       3️⃣ COVER IMAGE
+    ========================= */
+
+    const coverUrl = getCoverUrl(ad);
+    if (coverUrl) {
+      await fetch(NOTION_PAGE_URL(pageId), {
+        method: "PATCH",
+        headers: NOTION_HEADERS,
+        body: JSON.stringify({
+          cover: {
+            type: "external",
+            external: { url: coverUrl }
+          }
+        })
+      });
+    }
+
+    console.log("🎉 Page Notion complète :", pageId);
     res.sendStatus(200);
+
   } catch (err) {
     console.error("❌ ERREUR :", err);
     res.sendStatus(500);
