@@ -47,40 +47,25 @@ function buildPropertiesFromSaved(saved, savedAd) {
   const projetValue = city ? `${typeLabel} ${city}` : `${typeLabel}`;
 
   return {
-    // Projet (title)
     "Projet": {
-      title: [
-        { type: "text", text: { content: projetValue } }
-      ]
+      title: [{ type: "text", text: { content: projetValue } }]
     },
 
     "Annonce": { url: saved.url || null },
-
     "Prix affiché": { number: saved.price ?? null },
-
     "Surface Habitable": { number: saved.surface ?? null },
-
     "Surface Terrain": { number: saved.landSurface ?? null },
 
     "Intérêt initial": {
-      rich_text: [{
-        type: "text",
-        text: { content: String(comment) }
-      }]
+      rich_text: [{ type: "text", text: { content: String(comment) } }]
     },
 
     "Secteur": {
-      rich_text: [{
-        type: "text",
-        text: { content: city }
-      }]
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Adresse": {
-      rich_text: [{
-        type: "text",
-        text: { content: city }
-      }]
+      rich_text: [{ type: "text", text: { content: city } }]
     },
 
     "Lettre du DPE": {
@@ -90,20 +75,13 @@ function buildPropertiesFromSaved(saved, savedAd) {
     },
 
     "Agence / AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.name || "" }
-      }]
+      rich_text: [{ type: "text", text: { content: saved.publisher?.name || "" } }]
     },
 
     "Téléphone AI": {
-      rich_text: [{
-        type: "text",
-        text: { content: saved.publisher?.phone || "" }
-      }]
+      rich_text: [{ type: "text", text: { content: saved.publisher?.phone || "" } }]
     },
 
-    // ✅ Case à cocher activée
     "Confirmation du duo": {
       checkbox: true
     }
@@ -124,41 +102,23 @@ app.post("/webhook", async (req, res) => {
     const kanban = savedAd?.kanbanCategory;
 
     if (!savedAd || !saved) {
-      console.error("❌ Données invalides reçues");
-      return res.status(400).json({
-        error: "Invalid payload",
-        pictogram: "🔴",
-        message: "Payload invalide"
-      });
+      return res.status(400).json({ error: "Invalid payload" });
     }
 
-    // Ignorer suppressions (on ne supprime pas en Notion)
     if (event && event.toLowerCase().includes("deleted")) {
-      console.log("⏭️ Suppression ignorée");
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: "Suppression ignorée"
-      });
+      return res.status(200).json({ ignored: true });
     }
 
-    // Filtrer sur KanbanCategory = "Notion"
     if (kanban !== "Notion") {
-      console.log(`⏭️ Ignoré : KanbanCategory = "${kanban}"`);
-      return res.status(200).json({
-        ignored: true,
-        pictogram: "⚪",
-        message: `Annonce ignorée car KanbanCategory = "${kanban}"`
-      });
+      return res.status(200).json({ ignored: true });
     }
 
-    // 1) Créer la page en demandant le template par défaut
+    // 1) Création page (template par défaut "Nouvelle page")
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
       template: { type: "default" }
     };
 
-    console.log("📤 Création page (template default) sur Notion...");
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
@@ -167,79 +127,47 @@ app.post("/webhook", async (req, res) => {
 
     const createData = await createRes.json();
     if (!createRes.ok) {
-      console.error("❌ Erreur lors de la création (Notion) :", createData);
-      return res.status(500).json({
-        error: createData,
-        pictogram: "🔴",
-        message: "Erreur lors de la création Notion"
-      });
+      return res.status(500).json({ error: createData });
     }
 
     const createdPageId = createData.id;
-    console.log("✅ Page créée (id) :", createdPageId);
 
-    // 2) PATCH : mettre à jour les propriétés (y compris checkbox)
-    const propertiesToUpdate = buildPropertiesFromSaved(saved, savedAd);
-    const updatePayload = { properties: propertiesToUpdate };
+    // 2) Mise à jour propriétés
+    const updatePayload = {
+      properties: buildPropertiesFromSaved(saved, savedAd)
+    };
 
-    console.log("🔁 Mise à jour des propriétés...", updatePayload);
-    const updateRes = await fetch(NOTION_PAGE_URL(createdPageId), {
+    await fetch(NOTION_PAGE_URL(createdPageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
       body: JSON.stringify(updatePayload)
     });
 
-    const updateData = await updateRes.json();
-    if (!updateRes.ok) {
-      console.error("❌ Erreur mise à jour (Notion) :", updateData);
-      return res.status(500).json({
-        error: updateData,
-        pictogram: "🔴",
-        message: "Erreur lors de la mise à jour des propriétés"
+    // 3) Couverture
+    const coverUrl = saved.pictureUrl || saved.pictureUrls?.[0];
+    if (coverUrl) {
+      await fetch(NOTION_PAGE_URL(createdPageId), {
+        method: "PATCH",
+        headers: NOTION_HEADERS,
+        body: JSON.stringify({
+          cover: { type: "external", external: { url: coverUrl } }
+        })
       });
     }
 
-    // 3) Couverture si image
-    const coverUrl = saved.pictureUrl || (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
-    if (coverUrl) {
-      try {
-        const coverRes = await fetch(NOTION_PAGE_URL(createdPageId), {
-          method: "PATCH",
-          headers: NOTION_HEADERS,
-          body: JSON.stringify({
-            cover: { type: "external", external: { url: coverUrl } }
-          })
-        });
-
-        if (!coverRes.ok) {
-          const coverData = await coverRes.json();
-          console.warn("⚠️ Impossible de mettre la couverture :", coverData);
-        } else {
-          console.log("🖼️ Couverture définie.");
-        }
-      } catch (err) {
-        console.warn("⚠️ Erreur lors de la mise de la couverture :", err.message);
-      }
-    }
-
-    console.log("🎉 Page Notion mise à jour :", createdPageId);
     return res.status(200).json({
       status: "success",
-      notion_page_id: createdPageId,
-      pictogram: "🟢",
-      message: "Annonce ajoutée à Notion (Confirmation du duo cochée)"
+      notion_page_id: createdPageId
     });
 
   } catch (err) {
-    console.error("🔥 ERREUR serveur :", err);
-    return res.status(500).json({
-      error: err.message,
-      pictogram: "🔴",
-      message: "Erreur serveur"
-    });
+    console.error(err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
 // --- SERVER ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Webhook serveur lancé sur port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Webhook serveur lancé sur port ${PORT}`)
+);
