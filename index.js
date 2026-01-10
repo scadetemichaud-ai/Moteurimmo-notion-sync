@@ -32,42 +32,6 @@ function todayISO() {
   return new Date().toISOString().split("T")[0];
 }
 
-function currentYear() {
-  return new Date().getFullYear();
-}
-
-/* ✅ COMPTEUR FIABLE (illimité) */
-async function generateCounter() {
-  const year = currentYear().toString();
-
-  const response = await notion.databases.query({
-    database_id: DATABASE_ID,
-    sorts: [
-      {
-        property: "Projet",
-        direction: "descending",
-      },
-    ],
-    page_size: 1,
-  });
-
-  if (response.results.length === 0) {
-    return `${year}-001`;
-  }
-
-  const lastTitle =
-    response.results[0].properties?.Projet?.title?.[0]?.plain_text || "";
-
-  const match = lastTitle.match(/^(\d{4})-(\d{3})$/);
-
-  if (!match || match[1] !== year) {
-    return `${year}-001`;
-  }
-
-  const next = Number(match[2]) + 1;
-  return `${year}-${String(next).padStart(3, "0")}`;
-}
-
 /* =========================
    EXTRACTION AGENCE / TEL
 ========================= */
@@ -126,6 +90,11 @@ function getCoverUrl(ad) {
   return ad.pictureUrls?.[0] || ad.pictureUrl || null;
 }
 
+function getTitle(ad) {
+  const city = ad.location?.city;
+  return city ? `Maison-${city}` : "Maison";
+}
+
 /* =========================
    WEBHOOK
 ========================= */
@@ -142,7 +111,10 @@ app.post("/webhook", async (req, res) => {
 
     console.log("📩 Import annonce Notion");
 
-    /* 1️⃣ CREATE PAGE (TEMPLATE DEFAULT) */
+    /* =========================
+       1️⃣ CREATE PAGE (TEMPLATE DEFAULT)
+    ========================= */
+
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
@@ -160,41 +132,68 @@ app.post("/webhook", async (req, res) => {
 
     const pageId = createData.id;
 
-    /* 2️⃣ UPDATE PROPERTIES */
-    const title = await generateCounter();
+    /* =========================
+       2️⃣ UPDATE PROPERTIES
+    ========================= */
 
     await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
       body: JSON.stringify({
         properties: {
-          Projet: { title: [{ text: { content: title } }] },
+          Projet: {
+            title: [{ text: { content: getTitle(ad) } }]
+          },
+
           Annonce: { url: getBestUrl(ad) },
+
           "Prix affiché": ad.price ? { number: ad.price } : null,
+
           "Surface Habitable": ad.surface ? { number: ad.surface } : null,
+
           "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
+
           "Intérêt initial": savedAd.comment
             ? { rich_text: [{ text: { content: savedAd.comment } }] }
             : null,
-          Adresse: { rich_text: [{ text: { content: getAddress(ad) } }] },
-          "Date de validation": { date: { start: todayISO() } },
+
+          Adresse: {
+            rich_text: [{ text: { content: getAddress(ad) } }]
+          },
+
+          "Date de validation": {
+            date: { start: todayISO() }
+          },
+
           "Lettre du DPE": ad.energyGrade
             ? { multi_select: [{ name: ad.energyGrade }] }
             : null,
-          "Agence / AI": { rich_text: [{ text: { content: getAgencyName(ad) } }] },
-          "Téléphone AI": { rich_text: [{ text: { content: getAgencyPhone(ad) } }] }
+
+          "Agence / AI": {
+            rich_text: [{ text: { content: getAgencyName(ad) } }]
+          },
+
+          "Téléphone AI": {
+            rich_text: [{ text: { content: getAgencyPhone(ad) } }]
+          }
         }
       })
     });
 
-    /* 3️⃣ COVER */
+    /* =========================
+       3️⃣ COVER IMAGE
+    ========================= */
+
     const coverUrl = getCoverUrl(ad);
     if (coverUrl) {
       await fetch(NOTION_PAGE_URL(pageId), {
         method: "PATCH",
         headers: NOTION_HEADERS,
         body: JSON.stringify({
-          cover: { type: "external", external: { url: coverUrl } }
+          cover: {
+            type: "external",
+            external: { url: coverUrl }
+          }
         })
       });
     }
