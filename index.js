@@ -121,17 +121,12 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Import annonce Notion");
 
     /* =========================
-       1️⃣ CREATE PAGE (TEMPLATE "Nouvelle page")
+       1️⃣ CREATE PAGE (TEMPLATE)
     ========================= */
 
     const page = await notion.pages.create({
       parent: { database_id: DATABASE_ID },
-
-      // ✅ TEMPLATE PAR DÉFAUT DU DATABASE
-      template: { type: "default" },
-
       cover: getCover(ad),
-
       properties: {
         Projet: {
           title: [{ text: { content: "Création…" } }],
