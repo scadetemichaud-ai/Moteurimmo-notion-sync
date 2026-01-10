@@ -52,8 +52,11 @@ function buildPropertiesFromSaved(saved, savedAd) {
     },
 
     "Annonce": { url: saved.url || null },
+
     "Prix affiché": { number: saved.price ?? null },
+
     "Surface Habitable": { number: saved.surface ?? null },
+
     "Surface Terrain": { number: saved.landSurface ?? null },
 
     "Intérêt initial": {
@@ -75,11 +78,17 @@ function buildPropertiesFromSaved(saved, savedAd) {
     },
 
     "Agence / AI": {
-      rich_text: [{ type: "text", text: { content: saved.publisher?.name || "" } }]
+      rich_text: [{
+        type: "text",
+        text: { content: saved.publisher?.name || "" }
+      }]
     },
 
     "Téléphone AI": {
-      rich_text: [{ type: "text", text: { content: saved.publisher?.phone || "" } }]
+      rich_text: [{
+        type: "text",
+        text: { content: saved.publisher?.phone || "" }
+      }]
     },
 
     "Confirmation du duo": {
@@ -113,7 +122,9 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ ignored: true });
     }
 
-    // 1) Création page (template par défaut "Nouvelle page")
+    // -------------------------------------------------
+    // ✅ CRÉATION DE LA PAGE AVEC LE TEMPLATE PAR DÉFAUT
+    // -------------------------------------------------
     const createPayload = {
       parent: { database_id: NOTION_DATABASE_ID },
       template: { type: "default" }
@@ -127,41 +138,54 @@ app.post("/webhook", async (req, res) => {
 
     const createData = await createRes.json();
     if (!createRes.ok) {
+      console.error("Erreur création Notion :", createData);
       return res.status(500).json({ error: createData });
     }
 
-    const createdPageId = createData.id;
+    const pageId = createData.id;
 
-    // 2) Mise à jour propriétés
+    // --- UPDATE PROPERTIES ---
     const updatePayload = {
       properties: buildPropertiesFromSaved(saved, savedAd)
     };
 
-    await fetch(NOTION_PAGE_URL(createdPageId), {
+    const updateRes = await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
       body: JSON.stringify(updatePayload)
     });
 
-    // 3) Couverture
-    const coverUrl = saved.pictureUrl || saved.pictureUrls?.[0];
+    if (!updateRes.ok) {
+      const err = await updateRes.json();
+      console.error("Erreur update Notion :", err);
+      return res.status(500).json({ error: err });
+    }
+
+    // --- COVER IMAGE ---
+    const coverUrl =
+      saved.pictureUrl ||
+      (Array.isArray(saved.pictureUrls) && saved.pictureUrls[0]);
+
     if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(createdPageId), {
+      await fetch(NOTION_PAGE_URL(pageId), {
         method: "PATCH",
         headers: NOTION_HEADERS,
         body: JSON.stringify({
-          cover: { type: "external", external: { url: coverUrl } }
+          cover: {
+            type: "external",
+            external: { url: coverUrl }
+          }
         })
       });
     }
 
     return res.status(200).json({
       status: "success",
-      notion_page_id: createdPageId
+      notion_page_id: pageId
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("🔥 Erreur serveur :", err);
     return res.status(500).json({ error: err.message });
   }
 });
