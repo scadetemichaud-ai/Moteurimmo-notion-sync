@@ -22,12 +22,12 @@ function todayISO() {
   return new Date().toISOString().split("T")[0];
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function currentYear() {
+  return new Date().getFullYear();
 }
 
 async function generateCounter() {
-  const year = new Date().getFullYear().toString();
+  const year = currentYear().toString();
 
   const response = await notion.databases.query({
     database_id: DATABASE_ID,
@@ -42,61 +42,53 @@ async function generateCounter() {
 }
 
 /* =========================
-   AGENCE / TEL EXTRACTION
+   EXTRACTION AGENCE / TEL
 ========================= */
 
-function extractAgencyFromDescription(text = "") {
-  const patterns = [
-    /présenté par\s+([^\n,]+)/i,
-    /vous est présenté par\s+([^\n,]+)/i,
-    /Ce bien vous est présenté par\s+([^\n,]+)/i,
-    /chez\s+([A-Z0-9&\s]+Immobilier)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return m[1].trim();
-  }
-
-  return "";
+function extractAgentName(description = "") {
+  const match = description.match(
+    /(présenté par|vous est présenté par)\s+([^,\n]+)/i
+  );
+  return match ? match[2].trim() : "";
 }
 
-function extractPhone(text = "") {
-  const match = text.match(/(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/);
+function extractPhone(description = "") {
+  const match = description.match(
+    /(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/
+  );
   return match ? match[0] : "";
 }
 
 function getAgencyName(ad) {
   if (ad.publisher?.name) return ad.publisher.name;
 
-  for (const d of ad.duplicates || []) {
-    if (d.publisher?.name) return d.publisher.name;
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.name) return dup.publisher.name;
   }
 
-  return extractAgencyFromDescription(ad.description || "");
+  return extractAgentName(ad.description || "");
 }
 
 function getAgencyPhone(ad) {
   if (ad.publisher?.phone) return ad.publisher.phone;
 
-  for (const d of ad.duplicates || []) {
-    if (d.publisher?.phone) return d.publisher.phone;
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.phone) return dup.publisher.phone;
   }
 
   return extractPhone(ad.description || "");
 }
 
 /* =========================
-   OTHER HELPERS
+   AUTRES HELPERS
 ========================= */
 
 function getBestUrl(ad) {
-  const priority = ["leboncoin", "bienici"];
+  const leboncoin = ad.duplicates?.find(d => d.origin === "leboncoin");
+  if (leboncoin?.url) return leboncoin.url;
 
-  for (const p of priority) {
-    const found = ad.duplicates?.find(d => d.origin === p);
-    if (found?.url) return found.url;
-  }
+  const bienici = ad.duplicates?.find(d => d.origin === "bienici");
+  if (bienici?.url) return bienici.url;
 
   return ad.url ?? null;
 }
@@ -108,8 +100,8 @@ function getAddress(ad) {
 }
 
 function getCover(ad) {
-  const url = ad.pictureUrls?.[0] || ad.pictureUrl;
-  return url ? { external: { url } } : undefined;
+  const img = ad.pictureUrls?.[0] || ad.pictureUrl;
+  return img ? { external: { url: img } } : undefined;
 }
 
 /* =========================
@@ -126,11 +118,10 @@ app.post("/webhook", async (req, res) => {
     const ad = savedAd.ad;
     if (!ad) return res.sendStatus(200);
 
-    console.log("📩 Création page Notion");
+    console.log("📩 Import annonce Notion");
 
     /* =========================
-       CREATE PAGE
-       → template par défaut appliqué automatiquement
+       1️⃣ CREATE PAGE (TEMPLATE)
     ========================= */
 
     const page = await notion.pages.create({
@@ -143,11 +134,11 @@ app.post("/webhook", async (req, res) => {
       },
     });
 
-    // laisser Notion appliquer le template
-    await sleep(600);
+    /* ⏳ micro-délai pour laisser Notion appliquer le template */
+    await new Promise(r => setTimeout(r, 500));
 
     /* =========================
-       UPDATE PROPERTIES
+       2️⃣ UPDATE PROPERTIES
     ========================= */
 
     const title = await generateCounter();
@@ -184,19 +175,23 @@ app.post("/webhook", async (req, res) => {
           : null,
 
         "Agence / AI": {
-          rich_text: [{ text: { content: getAgencyName(ad) || "" } }],
+          rich_text: [
+            { text: { content: getAgencyName(ad) || "" } },
+          ],
         },
 
         "Téléphone AI": {
-          rich_text: [{ text: { content: getAgencyPhone(ad) || "" } }],
+          rich_text: [
+            { text: { content: getAgencyPhone(ad) || "" } },
+          ],
         },
       },
     });
 
-    console.log("✅ Page Notion créée :", page.id);
+    console.log("✅ Page Notion complète :", page.id);
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ ERREUR", err);
+    console.error("❌ ERREUR :", err);
     res.sendStatus(500);
   }
 });
