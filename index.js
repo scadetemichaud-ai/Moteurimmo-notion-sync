@@ -36,19 +36,36 @@ function currentYear() {
   return new Date().getFullYear();
 }
 
+/* ✅ COMPTEUR FIABLE (illimité) */
 async function generateCounter() {
   const year = currentYear().toString();
 
   const response = await notion.databases.query({
     database_id: DATABASE_ID,
-    filter: {
-      property: "Projet",
-      title: { starts_with: year },
-    },
+    sorts: [
+      {
+        property: "Projet",
+        direction: "descending",
+      },
+    ],
+    page_size: 1,
   });
 
-  const index = response.results.length + 1;
-  return `${year}-${String(index).padStart(3, "0")}`;
+  if (response.results.length === 0) {
+    return `${year}-001`;
+  }
+
+  const lastTitle =
+    response.results[0].properties?.Projet?.title?.[0]?.plain_text || "";
+
+  const match = lastTitle.match(/^(\d{4})-(\d{3})$/);
+
+  if (!match || match[1] !== year) {
+    return `${year}-001`;
+  }
+
+  const next = Number(match[2]) + 1;
+  return `${year}-${String(next).padStart(3, "0")}`;
 }
 
 /* =========================
@@ -71,21 +88,17 @@ function extractPhone(description = "") {
 
 function getAgencyName(ad) {
   if (ad.publisher?.name) return ad.publisher.name;
-
   for (const dup of ad.duplicates || []) {
     if (dup.publisher?.name) return dup.publisher.name;
   }
-
   return extractAgentName(ad.description || "");
 }
 
 function getAgencyPhone(ad) {
   if (ad.publisher?.phone) return ad.publisher.phone;
-
   for (const dup of ad.duplicates || []) {
     if (dup.publisher?.phone) return dup.publisher.phone;
   }
-
   return extractPhone(ad.description || "");
 }
 
@@ -129,10 +142,7 @@ app.post("/webhook", async (req, res) => {
 
     console.log("📩 Import annonce Notion");
 
-    /* =========================
-       1️⃣ CREATE PAGE (TEMPLATE DEFAULT)
-    ========================= */
-
+    /* 1️⃣ CREATE PAGE (TEMPLATE DEFAULT) */
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
@@ -149,12 +159,8 @@ app.post("/webhook", async (req, res) => {
     }
 
     const pageId = createData.id;
-    console.log("✅ Page créée avec template :", pageId);
 
-    /* =========================
-       2️⃣ UPDATE PROPERTIES
-    ========================= */
-
+    /* 2️⃣ UPDATE PROPERTIES */
     const title = await generateCounter();
 
     await fetch(NOTION_PAGE_URL(pageId), {
@@ -162,59 +168,33 @@ app.post("/webhook", async (req, res) => {
       headers: NOTION_HEADERS,
       body: JSON.stringify({
         properties: {
-          Projet: {
-            title: [{ text: { content: title } }]
-          },
-
+          Projet: { title: [{ text: { content: title } }] },
           Annonce: { url: getBestUrl(ad) },
-
           "Prix affiché": ad.price ? { number: ad.price } : null,
-
           "Surface Habitable": ad.surface ? { number: ad.surface } : null,
-
           "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
-
           "Intérêt initial": savedAd.comment
             ? { rich_text: [{ text: { content: savedAd.comment } }] }
             : null,
-
-          Adresse: {
-            rich_text: [{ text: { content: getAddress(ad) } }]
-          },
-
-          "Date de validation": {
-            date: { start: todayISO() }
-          },
-
+          Adresse: { rich_text: [{ text: { content: getAddress(ad) } }] },
+          "Date de validation": { date: { start: todayISO() } },
           "Lettre du DPE": ad.energyGrade
             ? { multi_select: [{ name: ad.energyGrade }] }
             : null,
-
-          "Agence / AI": {
-            rich_text: [{ text: { content: getAgencyName(ad) } }]
-          },
-
-          "Téléphone AI": {
-            rich_text: [{ text: { content: getAgencyPhone(ad) } }]
-          }
+          "Agence / AI": { rich_text: [{ text: { content: getAgencyName(ad) } }] },
+          "Téléphone AI": { rich_text: [{ text: { content: getAgencyPhone(ad) } }] }
         }
       })
     });
 
-    /* =========================
-       3️⃣ COVER IMAGE
-    ========================= */
-
+    /* 3️⃣ COVER */
     const coverUrl = getCoverUrl(ad);
     if (coverUrl) {
       await fetch(NOTION_PAGE_URL(pageId), {
         method: "PATCH",
         headers: NOTION_HEADERS,
         body: JSON.stringify({
-          cover: {
-            type: "external",
-            external: { url: coverUrl }
-          }
+          cover: { type: "external", external: { url: coverUrl } }
         })
       });
     }
