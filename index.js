@@ -102,7 +102,7 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Import annonce vers Notion");
 
     /* =========================
-       1️⃣ CREATE PAGE (DEFAULT TEMPLATE)
+       1️⃣ CREATE PAGE (TEMPLATE DEFAULT)
     ========================= */
 
     const createRes = await fetch(NOTION_CREATE_URL, {
@@ -123,7 +123,7 @@ app.post("/webhook", async (req, res) => {
     const pageId = createData.id;
 
     /* =========================
-       2️⃣ UPDATE PROPERTIES
+       2️⃣ UPDATE PROPERTIES (NOMS EXACTS NOTION)
     ========================= */
 
     await fetch(NOTION_PAGE_URL(pageId), {
@@ -131,11 +131,11 @@ app.post("/webhook", async (req, res) => {
       headers: NOTION_HEADERS,
       body: JSON.stringify({
         properties: {
-          Titre: {
+          "Projet": {
             title: [{ text: { content: getTitle(ad) } }]
           },
 
-          Annonce: { url: getBestUrl(ad) },
+          "Annonce": { url: getBestUrl(ad) },
 
           "Prix affiché": ad.price ? { number: ad.price } : null,
 
@@ -147,7 +147,7 @@ app.post("/webhook", async (req, res) => {
             ? { rich_text: [{ text: { content: savedAd.comment } }] }
             : null,
 
-          Adresse: {
+          "Adresse": {
             rich_text: [{ text: { content: getAddress(ad) } }]
           },
 
@@ -188,7 +188,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    console.log("✅ Page Notion créée :", pageId);
+    console.log("✅ Page Notion créée et remplie :", pageId);
     res.sendStatus(200);
 
   } catch (err) {
