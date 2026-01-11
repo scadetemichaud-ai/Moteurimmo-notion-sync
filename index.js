@@ -28,62 +28,40 @@ const NOTION_PAGE_URL = (id) => `https://api.notion.com/v1/pages/${id}`;
    HELPERS
 ========================= */
 
-function todayISO() {
-  return new Date().toISOString().split("T")[0];
-}
+const todayISO = () => new Date().toISOString().split("T")[0];
 
-function getBestUrl(ad) {
-  const leboncoin = ad.duplicates?.find(d => d.origin === "leboncoin");
-  if (leboncoin?.url) return leboncoin.url;
+const getBestUrl = (ad) => {
+  const lbc = ad.duplicates?.find(d => d.origin === "leboncoin");
+  if (lbc?.url) return lbc.url;
+  const bi = ad.duplicates?.find(d => d.origin === "bienici");
+  if (bi?.url) return bi.url;
+  return ad.url ?? "";
+};
 
-  const bienici = ad.duplicates?.find(d => d.origin === "bienici");
-  if (bienici?.url) return bienici.url;
+const getCoverUrl = (ad) =>
+  ad.pictureUrls?.[0] || ad.pictureUrl || null;
 
-  return ad.url ?? null;
-}
-
-function getCoverUrl(ad) {
-  return ad.pictureUrls?.[0] || ad.pictureUrl || null;
-}
-
-function getAddress(ad) {
+const getAddress = (ad) => {
   if (!ad.location) return "";
   const { address, postalCode, city } = ad.location;
   return address || [postalCode, city].filter(Boolean).join(" ");
-}
+};
 
-function getTitle(ad) {
-  const city = ad.location?.city ?? "";
-  const title = ad.title ?? "";
-  return `${city} - ${title}`.trim();
-}
+const getTitle = (ad) =>
+  `${ad.location?.city ?? ""} - ${ad.title ?? ""}`.trim();
 
-/* ===== Agence / Téléphone ===== */
+const extractPhone = (text = "") =>
+  text.match(/(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/)?.[0] || "";
 
-function extractPhone(text = "") {
-  const match = text.match(/(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/);
-  return match ? match[0] : "";
-}
+const getAgencyName = (ad) =>
+  ad.publisher?.name ||
+  ad.duplicates?.find(d => d.publisher?.name)?.publisher.name ||
+  "";
 
-function getAgencyName(ad) {
-  if (ad.publisher?.name) return ad.publisher.name;
-
-  for (const dup of ad.duplicates || []) {
-    if (dup.publisher?.name) return dup.publisher.name;
-  }
-
-  return "";
-}
-
-function getAgencyPhone(ad) {
-  if (ad.publisher?.phone) return ad.publisher.phone;
-
-  for (const dup of ad.duplicates || []) {
-    if (dup.publisher?.phone) return dup.publisher.phone;
-  }
-
-  return extractPhone(ad.description || "");
-}
+const getAgencyPhone = (ad) =>
+  ad.publisher?.phone ||
+  ad.duplicates?.find(d => d.publisher?.phone)?.publisher.phone ||
+  extractPhone(ad.description || "");
 
 /* =========================
    WEBHOOK
@@ -102,7 +80,7 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Import annonce vers Notion");
 
     /* =========================
-       1️⃣ CREATE PAGE (TEMPLATE DEFAULT)
+       1️⃣ CREATE PAGE (DEFAULT TEMPLATE)
     ========================= */
 
     const createRes = await fetch(NOTION_CREATE_URL, {
@@ -116,62 +94,78 @@ app.post("/webhook", async (req, res) => {
 
     const createData = await createRes.json();
     if (!createRes.ok) {
-      console.error("❌ Erreur création Notion :", createData);
+      console.error("❌ Création échouée :", createData);
       return res.sendStatus(500);
     }
 
     const pageId = createData.id;
 
     /* =========================
-       2️⃣ UPDATE PROPERTIES (NOMS EXACTS NOTION)
+       2️⃣ BUILD PROPERTIES SAFELY
+    ========================= */
+
+    const properties = {};
+
+    properties["Projet"] = {
+      title: [{ text: { content: getTitle(ad) } }]
+    };
+
+    const url = getBestUrl(ad);
+    if (url) properties["Annonce"] = { url };
+
+    if (ad.price)
+      properties["Prix affiché"] = { number: ad.price };
+
+    if (ad.surface)
+      properties["Surface Habitable"] = { number: ad.surface };
+
+    if (ad.landSurface)
+      properties["Surface Terrain"] = { number: ad.landSurface };
+
+    if (savedAd.comment)
+      properties["Intérêt initial"] = {
+        rich_text: [{ text: { content: savedAd.comment } }]
+      };
+
+    const address = getAddress(ad);
+    if (address)
+      properties["Adresse"] = {
+        rich_text: [{ text: { content: address } }]
+      };
+
+    properties["Date de validation"] = {
+      date: { start: todayISO() }
+    };
+
+    if (ad.energyGrade)
+      properties["Lettre du DPE"] = {
+        multi_select: [{ name: ad.energyGrade }]
+      };
+
+    const agency = getAgencyName(ad);
+    if (agency)
+      properties["Agence / AI"] = {
+        rich_text: [{ text: { content: agency } }]
+      };
+
+    const phone = getAgencyPhone(ad);
+    if (phone)
+      properties["Téléphone AI"] = {
+        rich_text: [{ text: { content: phone } }]
+      };
+
+    /* =========================
+       3️⃣ UPDATE PAGE
     ========================= */
 
     await fetch(NOTION_PAGE_URL(pageId), {
       method: "PATCH",
       headers: NOTION_HEADERS,
-      body: JSON.stringify({
-        properties: {
-          "Projet": {
-            title: [{ text: { content: getTitle(ad) } }]
-          },
-
-          "Annonce": { url: getBestUrl(ad) },
-
-          "Prix affiché": ad.price ? { number: ad.price } : null,
-
-          "Surface Habitable": ad.surface ? { number: ad.surface } : null,
-
-          "Surface Terrain": ad.landSurface ? { number: ad.landSurface } : null,
-
-          "Intérêt initial": savedAd.comment
-            ? { rich_text: [{ text: { content: savedAd.comment } }] }
-            : null,
-
-          "Adresse": {
-            rich_text: [{ text: { content: getAddress(ad) } }]
-          },
-
-          "Date de validation": {
-            date: { start: todayISO() }
-          },
-
-          "Lettre du DPE": ad.energyGrade
-            ? { multi_select: [{ name: ad.energyGrade }] }
-            : null,
-
-          "Agence / AI": {
-            rich_text: [{ text: { content: getAgencyName(ad) } }]
-          },
-
-          "Téléphone AI": {
-            rich_text: [{ text: { content: getAgencyPhone(ad) } }]
-          }
-        }
-      })
+      body: JSON.stringify({ properties })
     });
 
     /* =========================
-       3️⃣ COVER IMAGE
+       4️⃣ COVER IMAGE
     ========================= */
 
     const coverUrl = getCoverUrl(ad);
@@ -188,7 +182,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    console.log("✅ Page Notion créée et remplie :", pageId);
+    console.log("✅ Page Notion remplie avec succès");
     res.sendStatus(200);
 
   } catch (err) {
