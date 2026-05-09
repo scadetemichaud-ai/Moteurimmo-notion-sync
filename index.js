@@ -18,7 +18,7 @@ const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 const NOTION_HEADERS = {
   Authorization: `Bearer ${NOTION_TOKEN}`,
   "Content-Type": "application/json",
-  "Notion-Version": "2025-09-03"
+  "Notion-Version": "2022-06-28"
 };
 
 const NOTION_CREATE_URL = "https://api.notion.com/v1/pages";
@@ -33,9 +33,11 @@ const todayISO = () => new Date().toISOString().split("T")[0];
 const getBestUrl = (ad) => {
   const lbc = ad.duplicates?.find(d => d.origin === "leboncoin");
   if (lbc?.url) return lbc.url;
+
   const bi = ad.duplicates?.find(d => d.origin === "bienici");
   if (bi?.url) return bi.url;
-  return ad.url ?? "";
+
+  return ad.url || "";
 };
 
 const getCoverUrl = (ad) =>
@@ -43,25 +45,61 @@ const getCoverUrl = (ad) =>
 
 const getAddress = (ad) => {
   if (!ad.location) return "";
-  const { address, postalCode, city } = ad.location;
-  return address || [postalCode, city].filter(Boolean).join(" ");
+
+  const {
+    address,
+    postalCode,
+    city
+  } = ad.location;
+
+  return (
+    address ||
+    [postalCode, city].filter(Boolean).join(" ")
+  );
 };
 
-const getTitle = (ad) =>
-  `${ad.location?.city ?? ""} - ${ad.title ?? ""}`.trim();
+const getTitle = (ad) => {
+  const city = ad.location?.city || "";
+  const title = ad.title || "";
 
-const extractPhone = (text = "") =>
-  text.match(/(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/)?.[0] || "";
+  return `${city} - ${title}`.trim();
+};
 
-const getAgencyName = (ad) =>
-  ad.publisher?.name ||
-  ad.duplicates?.find(d => d.publisher?.name)?.publisher.name ||
-  "";
+const extractPhone = (text = "") => {
+  const match = text.match(
+    /(\+33|0)[1-9](?:[\s.-]?\d{2}){4}/
+  );
 
-const getAgencyPhone = (ad) =>
-  ad.publisher?.phone ||
-  ad.duplicates?.find(d => d.publisher?.phone)?.publisher.phone ||
-  extractPhone(ad.description || "");
+  return match ? match[0] : "";
+};
+
+const getAgencyName = (ad) => {
+  if (ad.publisher?.name) {
+    return ad.publisher.name;
+  }
+
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.name) {
+      return dup.publisher.name;
+    }
+  }
+
+  return "";
+};
+
+const getAgencyPhone = (ad) => {
+  if (ad.publisher?.phone) {
+    return ad.publisher.phone;
+  }
+
+  for (const dup of ad.duplicates || []) {
+    if (dup.publisher?.phone) {
+      return dup.publisher.phone;
+    }
+  }
+
+  return extractPhone(ad.description || "");
+};
 
 /* =========================
    WEBHOOK
@@ -69,125 +107,263 @@ const getAgencyPhone = (ad) =>
 
 app.post("/webhook", async (req, res) => {
   try {
+
+    console.log(
+      "📩 WEBHOOK REÇU :",
+      JSON.stringify(req.body, null, 2)
+    );
+
     const savedAd = req.body?.savedAd;
-    if (!savedAd || savedAd.kanbanCategory !== "Notion") {
+
+    if (!savedAd) {
+      console.log("⏭️ Aucun savedAd");
+      return res.sendStatus(200);
+    }
+
+    if (savedAd.kanbanCategory !== "Notion") {
+      console.log(
+        `⏭️ Kanban ignoré : ${savedAd.kanbanCategory}`
+      );
       return res.sendStatus(200);
     }
 
     const ad = savedAd.ad;
-    if (!ad) return res.sendStatus(200);
+
+    if (!ad) {
+      console.log("⏭️ Aucun objet ad");
+      return res.sendStatus(200);
+    }
 
     console.log("📩 Import annonce vers Notion");
 
     /* =========================
-       1️⃣ CREATE PAGE (DEFAULT TEMPLATE)
+       1️⃣ CREATE PAGE
     ========================= */
 
     const createRes = await fetch(NOTION_CREATE_URL, {
       method: "POST",
       headers: NOTION_HEADERS,
       body: JSON.stringify({
-        parent: { database_id: NOTION_DATABASE_ID },
-        template: { type: "default" }
+        parent: {
+          database_id: NOTION_DATABASE_ID
+        },
+
+        template: {
+          type: "default"
+        }
       })
     });
 
     const createData = await createRes.json();
+
     if (!createRes.ok) {
-      console.error("❌ Création échouée :", createData);
+      console.error(
+        "❌ Erreur création page :",
+        createData
+      );
       return res.sendStatus(500);
     }
 
     const pageId = createData.id;
 
+    console.log("✅ Page créée :", pageId);
+
     /* =========================
-       2️⃣ BUILD PROPERTIES SAFELY
+       2️⃣ BUILD PROPERTIES
     ========================= */
 
     const properties = {};
 
+    /* ===== TITRE ===== */
+
     properties["Projet"] = {
-      title: [{ text: { content: getTitle(ad) } }]
+      title: [
+        {
+          text: {
+            content: getTitle(ad)
+          }
+        }
+      ]
     };
+
+    /* ===== URL ===== */
 
     const url = getBestUrl(ad);
-    if (url) properties["Annonce"] = { url };
 
-    if (ad.price)
-      properties["Prix affiché"] = { number: ad.price };
-
-    if (ad.surface)
-      properties["Surface Habitable"] = { number: ad.surface };
-
-    if (ad.landSurface)
-      properties["Surface Terrain"] = { number: ad.landSurface };
-
-    if (savedAd.comment)
-      properties["Intérêt initial"] = {
-        rich_text: [{ text: { content: savedAd.comment } }]
-      };
-
-    const address = getAddress(ad);
-    if (address)
-      properties["Adresse"] = {
-        rich_text: [{ text: { content: address } }]
-      };
-
-    properties["Date de validation"] = {
-      date: { start: todayISO() }
+    properties["Annonce"] = {
+      url: url || null
     };
 
-    if (ad.energyGrade)
-      properties["Lettre du DPE"] = {
-        multi_select: [{ name: ad.energyGrade }]
-      };
+    /* ===== PRIX ===== */
 
-    const agency = getAgencyName(ad);
-    if (agency)
-      properties["Agence / AI"] = {
-        rich_text: [{ text: { content: agency } }]
-      };
+    properties["Prix affiché"] = {
+      number:
+        typeof ad.price === "number"
+          ? ad.price
+          : null
+    };
 
-    const phone = getAgencyPhone(ad);
-    if (phone)
-      properties["Téléphone AI"] = {
-        rich_text: [{ text: { content: phone } }]
-      };
+    /* ===== SURFACE ===== */
+
+    properties["Surface Habitable"] = {
+      number:
+        typeof ad.surface === "number"
+          ? ad.surface
+          : null
+    };
+
+    properties["Surface Terrain"] = {
+      number:
+        typeof ad.landSurface === "number"
+          ? ad.landSurface
+          : null
+    };
+
+    /* ===== COMMENTAIRE ===== */
+
+    properties["Intérêt initial"] = {
+      rich_text: [
+        {
+          text: {
+            content: savedAd.comment || ""
+          }
+        }
+      ]
+    };
+
+    /* ===== ADRESSE ===== */
+
+    properties["Adresse"] = {
+      rich_text: [
+        {
+          text: {
+            content: getAddress(ad)
+          }
+        }
+      ]
+    };
+
+    /* ===== DATE ===== */
+
+    properties["Date de validation"] = {
+      date: {
+        start: todayISO()
+      }
+    };
+
+    /* ===== DPE ===== */
+
+    properties["Lettre du DPE"] = {
+      multi_select: ad.energyGrade
+        ? [{ name: ad.energyGrade }]
+        : []
+    };
+
+    /* ===== AGENCE ===== */
+
+    properties["Agence / AI"] = {
+      rich_text: [
+        {
+          text: {
+            content: getAgencyName(ad)
+          }
+        }
+      ]
+    };
+
+    /* ===== TÉLÉPHONE ===== */
+
+    properties["Téléphone AI"] = {
+      rich_text: [
+        {
+          text: {
+            content: getAgencyPhone(ad)
+          }
+        }
+      ]
+    };
+
+    console.log(
+      "🧾 PROPERTIES ENVOYÉES :",
+      JSON.stringify(properties, null, 2)
+    );
 
     /* =========================
        3️⃣ UPDATE PAGE
     ========================= */
 
-    await fetch(NOTION_PAGE_URL(pageId), {
-      method: "PATCH",
-      headers: NOTION_HEADERS,
-      body: JSON.stringify({ properties })
-    });
+    const updateRes = await fetch(
+      NOTION_PAGE_URL(pageId),
+      {
+        method: "PATCH",
+        headers: NOTION_HEADERS,
+        body: JSON.stringify({
+          properties
+        })
+      }
+    );
+
+    const updateData = await updateRes.json();
+
+    if (!updateRes.ok) {
+      console.error(
+        "❌ Erreur update Notion :",
+        JSON.stringify(updateData, null, 2)
+      );
+
+      return res.sendStatus(500);
+    }
+
+    console.log("✅ Propriétés mises à jour");
 
     /* =========================
        4️⃣ COVER IMAGE
     ========================= */
 
     const coverUrl = getCoverUrl(ad);
+
     if (coverUrl) {
-      await fetch(NOTION_PAGE_URL(pageId), {
-        method: "PATCH",
-        headers: NOTION_HEADERS,
-        body: JSON.stringify({
-          cover: {
-            type: "external",
-            external: { url: coverUrl }
-          }
-        })
-      });
+
+      const coverRes = await fetch(
+        NOTION_PAGE_URL(pageId),
+        {
+          method: "PATCH",
+          headers: NOTION_HEADERS,
+          body: JSON.stringify({
+            cover: {
+              type: "external",
+              external: {
+                url: coverUrl
+              }
+            }
+          })
+        }
+      );
+
+      if (!coverRes.ok) {
+        const coverErr = await coverRes.json();
+
+        console.error(
+          "❌ Erreur cover :",
+          coverErr
+        );
+      } else {
+        console.log("🖼️ Cover ajoutée");
+      }
     }
 
-    console.log("✅ Page Notion remplie avec succès");
-    res.sendStatus(200);
+    console.log("🎉 Import terminé");
+
+    return res.sendStatus(200);
 
   } catch (err) {
-    console.error("🔥 ERREUR SERVEUR :", err);
-    res.sendStatus(500);
+
+    console.error(
+      "🔥 ERREUR SERVEUR :",
+      err
+    );
+
+    return res.sendStatus(500);
   }
 });
 
@@ -196,6 +372,9 @@ app.post("/webhook", async (req, res) => {
 ========================= */
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook Notion actif sur le port ${PORT}`);
+  console.log(
+    `🚀 Webhook Notion actif sur le port ${PORT}`
+  );
 });
